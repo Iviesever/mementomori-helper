@@ -5,6 +5,7 @@ chcp 65001 >nul
 title MementoMori Selective Export UI
 
 set "SCRIPT=%~dp0Export-MementoMori-Account.ps1"
+set "MEMENTOMORI_SAFE_EXPORT_EARLY_START=1"
 
 if not exist "%SCRIPT%" (
     echo [ERROR] Cannot find:
@@ -26,8 +27,9 @@ echo ============================================================
 echo   MementoMori Selective Export UI
 echo ============================================================
 echo.
-echo Fast mode first. If the runtime is old or missing,
-echo this launcher automatically retries with a full publish.
+echo Fast mode first. The browser UI opens as soon as the local
+echo server is listening, while account initialization continues
+echo in the background. Export waits automatically if needed.
 echo.
 
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -Interactive -SkipPublish -RestartOriginal
