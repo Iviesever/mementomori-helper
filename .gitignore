@@ -28,3 +28,9 @@ publish-android
 *.db
 *.keystore
 *.log
+
+# Local sanitized-export workflow. The JSON is intentionally kept out of git even
+# after its sensitive-field scan passes; it still contains private account state.
+mementomori-account*.json
+safe-export-runtime/
+_backup-safe-export-*/
