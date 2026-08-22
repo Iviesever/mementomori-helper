@@ -15,7 +15,7 @@ namespace MementoMori.WebUI;
 
 internal static class SafeExport
 {
-    public const string Schema = "mementomori-safe-account-export-v3";
+    public const string Schema = "mementomori-safe-account-export-v3.1";
 
     private static readonly string[] AllSections =
     {
@@ -23,6 +23,7 @@ internal static class SafeExport
         "progress",
         "levelLink",
         "characters",
+        "equipment",
         "decks",
         "items",
         "gacha"
@@ -41,6 +42,9 @@ internal static class SafeExport
         ["characters"] = "characters",
         ["character"] = "characters",
         ["chars"] = "characters",
+        ["equipment"] = "equipment",
+        ["gear"] = "equipment",
+        ["runes"] = "equipment",
         ["decks"] = "decks",
         ["deck"] = "decks",
         ["items"] = "items",
@@ -56,12 +60,18 @@ internal static class SafeExport
         ["progress"] = "progress.json",
         ["levelLink"] = "level-link.json",
         ["characters"] = "characters.json",
+        ["equipment"] = "equipment.json",
         ["decks"] = "decks.json",
         ["items"] = "items.json",
         ["gacha"] = "gacha.json"
     };
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions CompactJsonOptions = new()
+    {
+        WriteIndented = false
+    };
+
+    private static readonly JsonSerializerOptions PrettyJsonOptions = new()
     {
         WriteIndented = true
     };
@@ -115,6 +125,19 @@ internal static class SafeExport
             });
         }
 
+        var style = context.Request.Query["style"].ToString();
+        if (string.IsNullOrWhiteSpace(style)) style = "compact";
+        style = style.Trim().ToLowerInvariant();
+
+        if (style is not ("compact" or "pretty"))
+        {
+            return Results.BadRequest(new
+            {
+                error = "invalid_style",
+                message = "style must be compact or pretty"
+            });
+        }
+
         var account = accountManager.Current;
 
         if (!account.Funcs.LoginOk)
@@ -145,7 +168,7 @@ internal static class SafeExport
                 fileDownloadName: $"mementomori-account-{timestamp}.zip");
         }
 
-        var jsonBytes = SerializeSafe(snapshot);
+        var jsonBytes = SerializeSafe(snapshot, pretty: style == "pretty");
         return Results.File(
             jsonBytes,
             contentType: "application/json; charset=utf-8",
@@ -307,6 +330,63 @@ internal static class SafeExport
             return instanceIndexByGuid.TryGetValue(guid, out var index) ? index : null;
         }
 
+        object[] BuildEquipment(UserCharacterDtoInfo character)
+        {
+            return (data.UserEquipmentDtoInfos ?? new List<UserEquipmentDtoInfo>())
+                .Where(e => e.CharacterGuid == character.Guid)
+                .Select(e =>
+                {
+                    string? equipmentName = null;
+                    string? slot = null;
+                    string? rarity = null;
+
+                    try
+                    {
+                        var equipmentMb = Masters.EquipmentTable.GetById(e.EquipmentId);
+                        equipmentName = Masters.TextResourceTable.Get(equipmentMb.NameKey);
+                        slot = equipmentMb.SlotType.ToString();
+                        rarity = equipmentMb.RarityFlags.ToString();
+                    }
+                    catch
+                    {
+                    }
+
+                    var runes = e.GetSphereIds()
+                        .Where(id => id > 0)
+                        .Select(SafeSphere)
+                        .ToArray();
+
+                    return (object)new
+                    {
+                        equipmentId = e.EquipmentId,
+                        name = equipmentName,
+                        slot,
+                        rarity,
+                        reinforcementLevel = e.ReinforcementLv,
+                        additionalParameters = new
+                        {
+                            muscle = e.AdditionalParameterMuscle,
+                            energy = e.AdditionalParameterEnergy,
+                            intelligence = e.AdditionalParameterIntelligence,
+                            health = e.AdditionalParameterHealth
+                        },
+                        runes,
+                        sphereUnlockedCount = e.SphereUnlockedCount,
+                        sacredTreasure = new
+                        {
+                            level = e.LegendSacredTreasureLv,
+                            exp = e.LegendSacredTreasureExp
+                        },
+                        magicTreasure = new
+                        {
+                            level = e.MatchlessSacredTreasureLv,
+                            exp = e.MatchlessSacredTreasureExp
+                        }
+                    };
+                })
+                .ToArray();
+        }
+
         var snapshot = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["schema"] = Schema,
@@ -315,7 +395,7 @@ internal static class SafeExport
             {
                 helperVersion = "v1.14.2",
                 helperCommit = "167d2ac7d4f2b04bb6e191aae930be905bebd95e",
-                exporter = "selective-ui-v3"
+                exporter = "selective-ui-v3.1"
             },
             ["selectedSections"] = selectedInOrder
         };
@@ -405,60 +485,6 @@ internal static class SafeExport
                     {
                     }
 
-                    var equipment = (data.UserEquipmentDtoInfos ?? new List<UserEquipmentDtoInfo>())
-                        .Where(e => e.CharacterGuid == character.Guid)
-                        .Select(e =>
-                        {
-                            string? equipmentName = null;
-                            string? slot = null;
-                            string? rarity = null;
-
-                            try
-                            {
-                                var equipmentMb = Masters.EquipmentTable.GetById(e.EquipmentId);
-                                equipmentName = Masters.TextResourceTable.Get(equipmentMb.NameKey);
-                                slot = equipmentMb.SlotType.ToString();
-                                rarity = equipmentMb.RarityFlags.ToString();
-                            }
-                            catch
-                            {
-                            }
-
-                            var runes = e.GetSphereIds()
-                                .Where(id => id > 0)
-                                .Select(SafeSphere)
-                                .ToArray();
-
-                            return new
-                            {
-                                equipmentId = e.EquipmentId,
-                                name = equipmentName,
-                                slot,
-                                rarity,
-                                reinforcementLevel = e.ReinforcementLv,
-                                additionalParameters = new
-                                {
-                                    muscle = e.AdditionalParameterMuscle,
-                                    energy = e.AdditionalParameterEnergy,
-                                    intelligence = e.AdditionalParameterIntelligence,
-                                    health = e.AdditionalParameterHealth
-                                },
-                                runes,
-                                sphereUnlockedCount = e.SphereUnlockedCount,
-                                sacredTreasure = new
-                                {
-                                    level = e.LegendSacredTreasureLv,
-                                    exp = e.LegendSacredTreasureExp
-                                },
-                                magicTreasure = new
-                                {
-                                    level = e.MatchlessSacredTreasureLv,
-                                    exp = e.MatchlessSacredTreasureExp
-                                }
-                            };
-                        })
-                        .ToArray();
-
                     return new
                     {
                         instanceIndex = InstanceIndex(character.Guid),
@@ -498,12 +524,25 @@ internal static class SafeExport
                             damageReflect = battle.DamageReflect,
                             hpDrain = battle.HpDrain,
                             speed = battle.Speed
-                        },
-                        equipment
+                        }
                     };
                 })
                 .OrderByDescending(x => x.effectiveLevel)
                 .ThenByDescending(x => x.battlePower)
+                .ToArray();
+        }
+
+        if (selectedSections.Contains("equipment"))
+        {
+            snapshot["equipment"] = characterDtos
+                .Select(character => new
+                {
+                    instanceIndex = InstanceIndex(character.Guid),
+                    characterId = character.CharacterId,
+                    name = SafeCharacterName(character.CharacterId),
+                    equipment = BuildEquipment(character)
+                })
+                .Where(x => x.equipment.Length > 0)
                 .ToArray();
         }
 
@@ -699,15 +738,17 @@ internal static class SafeExport
 
     private static void AddZipEntry(ZipArchive archive, string name, object? value)
     {
-        var bytes = SerializeSafe(value);
+        // ZIP is for human inspection/archival, so keep the extracted JSON readable.
+        var bytes = SerializeSafe(value, pretty: true);
         var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
         using var stream = entry.Open();
         stream.Write(bytes, 0, bytes.Length);
     }
 
-    private static byte[] SerializeSafe(object? value)
+    private static byte[] SerializeSafe(object? value, bool pretty = false)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+        var options = pretty ? PrettyJsonOptions : CompactJsonOptions;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(value, options);
         var json = Encoding.UTF8.GetString(bytes);
 
         if (ForbiddenPropertyRegex.IsMatch(json))
