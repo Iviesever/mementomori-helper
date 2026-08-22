@@ -3,7 +3,8 @@ param(
     [int]${Port} = 5001,
     [switch]${SkipPublish},
     [switch]${KeepHistory},
-    [switch]${RestartOriginal}
+    [switch]${RestartOriginal},
+    [switch]${Interactive}
 )
 
 & {
@@ -30,8 +31,9 @@ param(
     ${ServerErrLog} = Join-Path ${WorkingRoot} "memento-safe-export-server.err.log"
     ${ExportPath} = Join-Path ${WorkingRoot} "mementomori-account.json"
 
-    ${ExportUrl} = "http://127.0.0.1:${Port}/safe-export"
     ${RootUrl} = "http://127.0.0.1:${Port}/"
+    ${ExportUrl} = "http://127.0.0.1:${Port}/safe-export"
+    ${UiUrl} = "http://127.0.0.1:${Port}/safe-export-ui"
 
     ${ServerProcess} = $null
     ${OriginalWasRunning} = $false
@@ -45,8 +47,9 @@ param(
             throw "Cannot find project: ${ProjectPath}"
         }
 
-        if (-not (Test-Path (Join-Path ${SourceDir} "MementoMori.WebUI\SafeExport.cs"))) {
-            throw "SafeExport.cs is missing. Switch to the safe-export-v2 branch first."
+        ${SafeExportPath} = Join-Path ${SourceDir} "MementoMori.WebUI\SafeExport.cs"
+        if (-not (Test-Path ${SafeExportPath})) {
+            throw "SafeExport.cs is missing."
         }
 
         Set-Location ${SourceDir}
@@ -55,6 +58,7 @@ param(
 
         Write-Host "Branch = ${Branch}"
         Write-Host "HEAD   = ${Head}"
+        Write-Host "Mode   = $(if (${Interactive}) { 'Interactive UI' } else { 'Automatic full JSON' })"
 
         Write-Host ""
         Write-Host "========== 2. CONFIG SAFETY CHECK ==========" -ForegroundColor Cyan
@@ -215,8 +219,44 @@ param(
 
         Write-Host "Server ready." -ForegroundColor Green
 
+        if (${Interactive}) {
+            Write-Host ""
+            Write-Host "========== 7. OPEN EXPORT UI ==========" -ForegroundColor Cyan
+
+            try {
+                ${UiProbe} = Invoke-WebRequest -Uri ${UiUrl} -Method Get -TimeoutSec 5
+                if (${UiProbe}.StatusCode -ne 200) {
+                    throw "UI endpoint returned HTTP $(${UiProbe}.StatusCode)."
+                }
+            }
+            catch {
+                throw "Interactive UI is unavailable in this runtime. Run again without -SkipPublish. $($_.Exception.Message)"
+            }
+
+            Write-Host "Opening:" -ForegroundColor Green
+            Write-Host ${UiUrl} -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Choose sections in the browser and click Export." -ForegroundColor Green
+            Write-Host "The default UI option closes the temporary server after download." -ForegroundColor Green
+            Write-Host "If you close the browser first, return here and press Ctrl+C to stop." -ForegroundColor Yellow
+
+            Start-Process ${UiUrl}
+
+            while ($true) {
+                ${ServerProcess}.Refresh()
+                if (${ServerProcess}.HasExited) {
+                    break
+                }
+                Start-Sleep -Seconds 1
+            }
+
+            Write-Host ""
+            Write-Host "UI export server has stopped." -ForegroundColor Green
+            return
+        }
+
         Write-Host ""
-        Write-Host "========== 7. EXPORT ==========" -ForegroundColor Cyan
+        Write-Host "========== 7. EXPORT FULL JSON ==========" -ForegroundColor Cyan
 
         ${Response} = Invoke-WebRequest -Uri ${ExportUrl} -Method Get -TimeoutSec 180
 
@@ -236,7 +276,7 @@ param(
         ${RawJson} = Get-Content ${ExportPath} -Raw
         ${Json} = ${RawJson} | ConvertFrom-Json
 
-        if (${Json}.schema -ne "mementomori-safe-account-export-v2") {
+        if (${Json}.schema -ne "mementomori-safe-account-export-v3") {
             throw "Unexpected schema: $(${Json}.schema)"
         }
 
