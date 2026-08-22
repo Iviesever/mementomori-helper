@@ -276,7 +276,7 @@ param(
         ${RawJson} = Get-Content ${ExportPath} -Raw
         ${Json} = ${RawJson} | ConvertFrom-Json
 
-        if (${Json}.schema -ne "mementomori-safe-account-export-v3") {
+        if (${Json}.schema -ne "mementomori-safe-account-export-v3.1") {
             throw "Unexpected schema: $(${Json}.schema)"
         }
 
@@ -303,6 +303,7 @@ param(
         Write-Host "Rank        : $(${Json}.player.rank)"
         Write-Host "Quest       : $(${Json}.progress.bossClearQuestMemo)"
         Write-Host "Characters  : $(@(${Json}.characters).Count)"
+        Write-Host "Equipment   : $(@(${Json}.equipment).Count) character loadouts"
         Write-Host "Decks       : $(@(${Json}.decks).Count)"
         Write-Host "Items       : $(@(${Json}.items).Count)"
         Write-Host "Gacha cases : $(@(${Json}.gacha.cases).Count)"
