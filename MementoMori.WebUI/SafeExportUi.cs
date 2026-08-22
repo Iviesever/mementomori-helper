@@ -43,7 +43,7 @@ internal static class SafeExportUi
 <title>MementoMori 账号导出</title>
 <style>
 :root {
-    color-scheme: light dark;
+    color-scheme: dark;
     font-family: system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
 }
 body {
@@ -52,7 +52,7 @@ body {
     color: #e5e7eb;
 }
 main {
-    max-width: 900px;
+    max-width: 980px;
     margin: 40px auto;
     padding: 0 20px 40px;
 }
@@ -67,6 +67,9 @@ main {
 h1 {
     margin: 0 0 8px;
     font-size: 28px;
+}
+h2 {
+    margin-top: 0;
 }
 .sub {
     margin: 0;
@@ -146,6 +149,27 @@ input[type=checkbox], input[type=radio] {
     gap: 18px;
     align-items: center;
 }
+.format-list {
+    display: grid;
+    gap: 10px;
+}
+.format-option {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px;
+    border: 1px solid #374151;
+    border-radius: 10px;
+    background: #111827;
+}
+.format-option strong {
+    display: block;
+    margin-bottom: 3px;
+}
+.format-option small {
+    color: #9ca3af;
+    line-height: 1.45;
+}
 .status {
     margin-top: 14px;
     min-height: 24px;
@@ -172,8 +196,8 @@ code {
     <section class="card">
         <h1>MementoMori 账号导出 <span class="badge">Local only</span></h1>
         <p class="sub">
-            选择需要的数据后导出。页面与导出接口只允许本机回环访问。<br>
-            未选择“卡池 / 保底”时，不会调用 Gacha/GetList。
+            V3.1：按需选择账号数据。页面与导出接口只允许本机回环访问。<br>
+            未选择“卡池 / 保底”时，不会调用 <code>Gacha/GetList</code>。
         </p>
     </section>
 
@@ -181,6 +205,7 @@ code {
         <h2>1. 选择导出内容</h2>
         <div class="toolbar">
             <button type="button" class="secondary" onclick="preset('all')">全部</button>
+            <button type="button" class="secondary" onclick="preset('light')">轻量账号</button>
             <button type="button" class="secondary" onclick="preset('quest')">推图分析</button>
             <button type="button" class="secondary" onclick="preset('character')">角色养成</button>
             <button type="button" class="secondary" onclick="preset('gacha')">抽卡分析</button>
@@ -202,7 +227,11 @@ code {
             </label>
             <label class="option">
                 <input type="checkbox" name="section" value="characters" checked>
-                <span><strong>角色 / 装备 / 符石</strong><small>角色等级、有效等级、战力、属性、装备与符石</small></span>
+                <span><strong>角色</strong><small>等级、有效等级、稀有度、属性、战力与战斗参数</small></span>
+            </label>
+            <label class="option">
+                <input type="checkbox" name="section" value="equipment" checked>
+                <span><strong>装备 / 符石</strong><small>强化、附加参数、圣装/魔装、符石名称与等级</small></span>
             </label>
             <label class="option">
                 <input type="checkbox" name="section" value="decks" checked>
@@ -217,17 +246,27 @@ code {
                 <span><strong>卡池 / 保底</strong><small>当前池、抽数、天井、奖励计数和消耗</small></span>
             </label>
         </div>
+        <p class="sub" style="margin-top:14px">
+            推荐平时用“轻量账号”；卡关时用“推图分析”；只有研究装备时才需要装备/符石明细。
+        </p>
     </section>
 
     <section class="card">
         <h2>2. 文件形式</h2>
-        <div class="row">
-            <label><input type="radio" name="format" value="json" checked> 单个 JSON（推荐，最适合直接发给 ChatGPT）</label>
-            <label><input type="radio" name="format" value="zip"> ZIP 分模块文件</label>
+        <div class="format-list">
+            <label class="format-option">
+                <input type="radio" name="exportMode" value="compact" checked>
+                <span><strong>紧凑 JSON（推荐）</strong><small>数据完整，不写缩进和多余换行；最适合直接发给 ChatGPT，文件最小。</small></span>
+            </label>
+            <label class="format-option">
+                <input type="radio" name="exportMode" value="pretty">
+                <span><strong>格式化 JSON</strong><small>内容与紧凑 JSON 相同，但带缩进和换行，适合自己查看。</small></span>
+            </label>
+            <label class="format-option">
+                <input type="radio" name="exportMode" value="zip">
+                <span><strong>ZIP 分模块文件</strong><small>生成 manifest.json，并按勾选模块拆成独立 JSON，适合归档。</small></span>
+            </label>
         </div>
-        <p class="sub">
-            JSON 会只包含勾选的模块；ZIP 会生成 <code>manifest.json</code>，并将各模块拆成独立 JSON。
-        </p>
     </section>
 
     <section class="card">
@@ -251,10 +290,11 @@ const sectionBoxes = () => Array.from(document.querySelectorAll('input[name="sec
 
 function preset(name) {
     const map = {
-        all: ['player','progress','levelLink','characters','decks','items','gacha'],
-        quest: ['player','progress','levelLink','characters','decks','items'],
-        character: ['player','levelLink','characters','decks','items'],
-        gacha: ['player','items','gacha'],
+        all: ['player','progress','levelLink','characters','equipment','decks','items','gacha'],
+        light: ['player','progress','levelLink','characters','decks','items'],
+        quest: ['player','progress','levelLink','characters','equipment','decks','items'],
+        character: ['player','levelLink','characters','equipment','items'],
+        gacha: ['player','characters','items','gacha'],
         none: []
     };
     const selected = new Set(map[name] || []);
@@ -292,13 +332,15 @@ async function exportData() {
         return;
     }
 
-    const format = document.querySelector('input[name="format"]:checked').value;
+    const mode = document.querySelector('input[name="exportMode"]:checked').value;
+    const format = mode === 'zip' ? 'zip' : 'json';
+    const style = mode === 'pretty' ? 'pretty' : 'compact';
     const exportBtn = document.getElementById('exportBtn');
     exportBtn.disabled = true;
 
     try {
         setStatus(`正在读取并导出：${sections.join(', ')}…`);
-        const url = `/safe-export?sections=${encodeURIComponent(sections.join(','))}&format=${encodeURIComponent(format)}`;
+        const url = `/safe-export?sections=${encodeURIComponent(sections.join(','))}&format=${encodeURIComponent(format)}&style=${encodeURIComponent(style)}`;
         const response = await fetch(url, { method: 'GET' });
 
         if (!response.ok) {
@@ -316,7 +358,8 @@ async function exportData() {
         anchor.remove();
         URL.revokeObjectURL(objectUrl);
 
-        setStatus(`导出完成：${anchor.download}\n模块：${sections.join(', ')}`);
+        const sizeKb = (blob.size / 1024).toFixed(1);
+        setStatus(`导出完成：${anchor.download}\n大小：${sizeKb} KB\n模块：${sections.join(', ')}`);
 
         if (document.getElementById('autoClose').checked) {
             setTimeout(shutdownServer, 700);
