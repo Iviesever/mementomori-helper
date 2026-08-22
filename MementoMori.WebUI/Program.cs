@@ -93,11 +93,17 @@ internal class Program
         {
             // Interactive safe-export mode starts Kestrel before the helper finishes
             // network/master-data/login initialization. This lets the local export UI
-            // appear immediately. A real /safe-export request waits here until the
-            // normal initialization sequence has completed, preventing a second login
-            // flow from racing the startup initialization.
+            // appear immediately. The launcher's root probe gets a cheap local 200
+            // response, while a real /safe-export request waits for initialization.
             app.Use(async (context, next) =>
             {
+                if (context.Request.Path == "/")
+                {
+                    context.Response.ContentType = "text/plain; charset=utf-8";
+                    await context.Response.WriteAsync("safe-export-ui-starting");
+                    return;
+                }
+
                 if (context.Request.Path.Equals("/safe-export", StringComparison.OrdinalIgnoreCase))
                 {
                     try
