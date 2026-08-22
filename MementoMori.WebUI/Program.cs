@@ -81,6 +81,7 @@ internal class Program
 
         app.UseStaticFiles();
         app.UseAntiforgery();
+        SafeExport.Map(app);
         app.MapRazorComponents<App>()
             .AddAdditionalAssemblies(typeof(Index).Assembly)
             .AddInteractiveServerRenderMode();
