@@ -23,7 +23,10 @@ using Microsoft.Extensions.FileProviders;
 
 internal class Program
 {
-    public static void Main(string[] args)
+    private static readonly TaskCompletionSource<bool> SafeExportInitialization =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public static async Task Main(string[] args)
     {
         PlatformRegistrationManager.SetRegistrationNamespaces(RegistrationNamespace.Blazor);
         var builder = WebApplication.CreateBuilder(args);
@@ -70,7 +73,6 @@ internal class Program
             return RestService.For<IMemeMoriServerApi>(serverUrl);
         });
 
-
         builder.Services.AddQuartz();
         builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
         var app = builder.Build();
@@ -81,17 +83,95 @@ internal class Program
 
         app.UseStaticFiles();
         app.UseAntiforgery();
+
+        var earlySafeExportStart = string.Equals(
+            Environment.GetEnvironmentVariable("MEMENTOMORI_SAFE_EXPORT_EARLY_START"),
+            "1",
+            StringComparison.Ordinal);
+
+        if (earlySafeExportStart)
+        {
+            // Interactive safe-export mode starts Kestrel before the helper finishes
+            // network/master-data/login initialization. This lets the local export UI
+            // appear immediately. The launcher's root probe gets a cheap local 200
+            // response, while a real /safe-export request waits for initialization.
+            app.Use(async (context, next) =>
+            {
+                if (context.Request.Path == "/")
+                {
+                    context.Response.ContentType = "text/plain; charset=utf-8";
+                    await context.Response.WriteAsync("safe-export-ui-starting");
+                    return;
+                }
+
+                if (string.Equals(
+                        context.Request.Path.Value,
+                        "/safe-export",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        await SafeExportInitialization.Task.WaitAsync(
+                            TimeSpan.FromMinutes(3),
+                            context.RequestAborted);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    catch (TimeoutException)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                        await context.Response.WriteAsJsonAsync(new
+                        {
+                            error = "initialization_timeout",
+                            message = "The helper did not finish initialization within three minutes."
+                        });
+                        return;
+                    }
+                    catch (Exception e)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                        await context.Response.WriteAsJsonAsync(new
+                        {
+                            error = "initialization_failed",
+                            errorType = e.GetBaseException().GetType().Name
+                        });
+                        return;
+                    }
+                }
+
+                await next();
+            });
+        }
+
         SafeExport.Map(app);
         app.MapRazorComponents<App>()
             .AddAdditionalAssemblies(typeof(Index).Assembly)
             .AddInteractiveServerRenderMode();
-        //app.UseRouting();
 
-        //app.MapBlazorHub();
-        //app.MapFallbackToPage("/_Host");
+        if (!earlySafeExportStart)
+        {
+            await InitializeAsync(app.Services);
+            await app.RunAsync();
+            return;
+        }
 
-        InitializeAsync(app.Services).ConfigureAwait(false).GetAwaiter().GetResult();
-        app.Run();
+        // In interactive export mode, start listening first so the browser UI can
+        // open while master-data refresh and account login continue in parallel.
+        await app.StartAsync();
+
+        try
+        {
+            await InitializeAsync(app.Services);
+            SafeExportInitialization.TrySetResult(true);
+        }
+        catch (Exception e)
+        {
+            SafeExportInitialization.TrySetException(e);
+        }
+
+        await app.WaitForShutdownAsync();
     }
 
     private static async Task InitializeAsync(IServiceProvider sp)
