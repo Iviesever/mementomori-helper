@@ -104,7 +104,10 @@ internal class Program
                     return;
                 }
 
-                if (context.Request.Path.Equals("/safe-export", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(
+                        context.Request.Path.Value,
+                        "/safe-export",
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
