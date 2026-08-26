@@ -12,5 +12,7 @@ If Not fso.FileExists(launcher) Then
     WScript.Quit 1
 End If
 
+shell.Popup "Starting MementoMori Account Exporter...", 2, "MementoMori Account Exporter", 64
+
 command = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " & Chr(34) & launcher & Chr(34)
 shell.Run command, 0, False
