@@ -1,9 +1,8 @@
 param(
-    [string]${ReleaseDir},
+    [string]${ConfigPath},
     [int]${Port} = 5001,
     [switch]${SkipPublish},
     [switch]${KeepHistory},
-    [switch]${RestartOriginal},
     [switch]${Interactive}
 )
 
@@ -13,14 +12,12 @@ param(
     ${SourceDir} = (Resolve-Path (Join-Path ${PSScriptRoot} "..\..")).Path
     ${WorkingRoot} = Split-Path ${SourceDir} -Parent
 
-    if ([string]::IsNullOrWhiteSpace(${ReleaseDir})) {
-        ${ReleaseDir} = Join-Path ${WorkingRoot} "MementoMoriHelper-v1.14.2\app\publish-win-x64"
+    if ([string]::IsNullOrWhiteSpace(${ConfigPath})) {
+        ${PrivateRoot} = Join-Path ${env:LOCALAPPDATA} "MementoMoriExporter"
+        ${ConfigPath} = Join-Path ${PrivateRoot} "appsettings.user.json"
     }
 
     ${ProjectPath} = Join-Path ${SourceDir} "MementoMori.WebUI\MementoMori.WebUI.csproj"
-    ${ReleaseExe} = Join-Path ${ReleaseDir} "MementoMori.WebUI.exe"
-    ${ReleaseConfig} = Join-Path ${ReleaseDir} "appsettings.user.json"
-    ${ReleaseLauncher} = Join-Path ${ReleaseDir} "Start-MementoMori-ReadOnly.ps1"
 
     ${RuntimeDir} = Join-Path ${WorkingRoot} "safe-export-runtime"
     ${RuntimeDll} = Join-Path ${RuntimeDir} "MementoMori.WebUI.dll"
@@ -36,7 +33,6 @@ param(
     ${UiUrl} = "http://127.0.0.1:${Port}/safe-export-ui"
 
     ${ServerProcess} = $null
-    ${OriginalWasRunning} = $false
     ${OldAspNetUrls} = ${env:ASPNETCORE_URLS}
 
     try {
@@ -63,11 +59,11 @@ param(
         Write-Host ""
         Write-Host "========== 2. CONFIG SAFETY CHECK ==========" -ForegroundColor Cyan
 
-        if (-not (Test-Path ${ReleaseConfig})) {
-            throw "Cannot find local login config: ${ReleaseConfig}"
+        if (-not (Test-Path ${ConfigPath})) {
+            throw "Cannot find local login config: ${ConfigPath}"
         }
 
-        ${Config} = Get-Content ${ReleaseConfig} -Raw | ConvertFrom-Json
+        ${Config} = Get-Content ${ConfigPath} -Raw | ConvertFrom-Json
 
         if ($null -eq ${Config}.GameConfig -or $null -eq ${Config}.GameConfig.AutoJob) {
             throw "GameConfig.AutoJob is missing from appsettings.user.json."
@@ -134,7 +130,7 @@ param(
         Write-Host ""
         Write-Host "========== 4. PREPARE RUNTIME ==========" -ForegroundColor Cyan
 
-        Copy-Item ${ReleaseConfig} ${RuntimeConfig} -Force
+        Copy-Item ${ConfigPath} ${RuntimeConfig} -Force
         ${RuntimeConfigCheck} = Get-Content ${RuntimeConfig} -Raw | ConvertFrom-Json
 
         if (${RuntimeConfigCheck}.GameConfig.AutoJob.DisableAll -ne $true) {
@@ -145,26 +141,8 @@ param(
         Write-Host "Temporary login config copied without printing it." -ForegroundColor Green
 
         Write-Host ""
-        Write-Host "========== 5. STOP ORIGINAL INSTANCE ==========" -ForegroundColor Cyan
-
-        ${OriginalProcesses} = @(
-            Get-Process -Name "MementoMori.WebUI" -ErrorAction SilentlyContinue |
-            Where-Object {
-                try { $_.Path -eq ${ReleaseExe} } catch { $false }
-            }
-        )
-
-        if (${OriginalProcesses}.Count -gt 0) {
-            ${OriginalWasRunning} = $true
-            foreach (${Process} in ${OriginalProcesses}) {
-                Write-Host "Stopping original PID $(${Process}.Id)..." -ForegroundColor Yellow
-                Stop-Process -Id ${Process}.Id -Force
-            }
-            Start-Sleep -Seconds 2
-        }
-        else {
-            Write-Host "Original Helper was not running."
-        }
+        Write-Host "========== 5. STANDALONE MODE ==========" -ForegroundColor Cyan
+        Write-Host "No legacy Helper release is required." -ForegroundColor Green
 
         Write-Host ""
         Write-Host "========== 6. START LOCAL EXPORT SERVER ==========" -ForegroundColor Cyan
@@ -323,15 +301,6 @@ param(
         if (Test-Path ${RuntimeConfig}) {
             Remove-Item ${RuntimeConfig} -Force
             Write-Host "Temporary runtime credential config removed." -ForegroundColor Green
-        }
-
-        if (${RestartOriginal} -and ${OriginalWasRunning} -and (Test-Path ${ReleaseLauncher})) {
-            ${PowerShellExe} = if (Get-Command pwsh.exe -ErrorAction SilentlyContinue) { "pwsh.exe" } else { "powershell.exe" }
-            Start-Process `
-                -FilePath ${PowerShellExe} `
-                -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"${ReleaseLauncher}`"") `
-                -WorkingDirectory ${ReleaseDir}
-            Write-Host "Original Helper restart requested." -ForegroundColor Green
         }
     }
 }
