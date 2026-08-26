@@ -1,6 +1,12 @@
 & {
     $ErrorActionPreference = "Stop"
 
+    # Start the local export UI before account initialization finishes.
+    ${env:MEMENTOMORI_SAFE_EXPORT_EARLY_START} = "1"
+
+    # Keep dotnet restore/publish output readable on localized Windows.
+    ${env:DOTNET_CLI_UI_LANGUAGE} = "en-US"
+
     ${MainScript} = Join-Path ${PSScriptRoot} "Export-MementoMori-Account.ps1"
     ${RepoRoot} = (Resolve-Path (Join-Path ${PSScriptRoot} "..\..")).Path
     ${WorkingRoot} = Split-Path ${RepoRoot} -Parent
@@ -92,7 +98,7 @@
             }
 
             "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Restore complete. Publishing runtime..." | Out-File ${LauncherLog} -Append -Encoding utf8
-            & ${MainScript} -Interactive -RestartOriginal *>> ${LauncherLog}
+            & ${MainScript} -Interactive *>> ${LauncherLog}
         }
         else {
             Show-Popup `
@@ -102,7 +108,7 @@
 
             try {
                 "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Using cached runtime..." | Out-File ${LauncherLog} -Encoding utf8
-                & ${MainScript} -Interactive -SkipPublish -RestartOriginal *>> ${LauncherLog}
+                & ${MainScript} -Interactive -SkipPublish *>> ${LauncherLog}
             }
             catch {
                 "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Cached runtime failed. Rebuilding once..." | Out-File ${LauncherLog} -Append -Encoding utf8
@@ -123,7 +129,7 @@
                     throw "dotnet restore failed. See ${RestoreLog}"
                 }
 
-                & ${MainScript} -Interactive -RestartOriginal *>> ${LauncherLog}
+                & ${MainScript} -Interactive *>> ${LauncherLog}
             }
         }
     }
