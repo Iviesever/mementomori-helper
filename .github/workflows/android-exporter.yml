@@ -54,7 +54,8 @@ jobs:
       - name: Build self-contained preview APK
         shell: pwsh
         run: |
-          dotnet build MementoMori.Exporter.Android/MementoMori.Exporter.Android.csproj -c Debug -f net9.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:AndroidUseSharedRuntime=false "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }}
+          New-Item -ItemType Directory -Path artifacts/build-logs -Force | Out-Null
+          dotnet build MementoMori.Exporter.Android/MementoMori.Exporter.Android.csproj -c Debug -f net9.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:AndroidUseSharedRuntime=false "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }} "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/android-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $apk = Get-ChildItem MementoMori.Exporter.Android/bin/Debug -Recurse -Filter '*-Signed.apk' | Select-Object -First 1
           if (-not $apk) { throw 'Build did not produce a signed APK.' }
@@ -87,3 +88,11 @@ jobs:
           name: android-exporter-test-results
           path: artifacts/test-results/
           if-no-files-found: ignore
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-exporter-build-logs
+          path: artifacts/build-logs/
+          if-no-files-found: ignore
+          retention-days: 14
