@@ -26,6 +26,8 @@
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#F4F6FB" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F4F6FB" BaseSize="128,128" />
     <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+    <!-- AddQuartz is in the DI integration package, not the base Quartz assembly. -->
+    <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
     <ProjectReference Include="../MementoMori.BlazorShared/MementoMori.BlazorShared.csproj" />
   </ItemGroup>
 </Project>
