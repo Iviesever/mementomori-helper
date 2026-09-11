@@ -1,9 +1,12 @@
-using Android.App;
-using Android.Content.PM;
+using global::Android.App;
+using global::Android.Content.PM;
 
-namespace MementoMori.Exporter.Android;
-
-[Activity(Theme = "@style/Maui.SplashTheme", MainLauncher = true,
-    ConfigurationChanges = ConfigChanges.ScreenSize | ConfigChanges.Orientation |
-    ConfigChanges.UiMode | ConfigChanges.ScreenLayout | ConfigChanges.SmallestScreenSize | ConfigChanges.Density)]
-public sealed class MainActivity : MauiAppCompatActivity { }
+namespace MementoMori.Exporter.Android
+{
+    [Activity(Theme = "@style/Maui.SplashTheme", MainLauncher = true,
+        ConfigurationChanges = ConfigChanges.ScreenSize | ConfigChanges.Orientation |
+        ConfigChanges.UiMode | ConfigChanges.ScreenLayout | ConfigChanges.SmallestScreenSize | ConfigChanges.Density)]
+    public sealed class MainActivity : MauiAppCompatActivity
+    {
+    }
+}
