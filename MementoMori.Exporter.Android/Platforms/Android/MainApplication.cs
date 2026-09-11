@@ -1,10 +1,15 @@
-using Android.App;
-using Android.Runtime;
+using global::Android.App;
+using global::Android.Runtime;
 
-namespace MementoMori.Exporter.Android;
-
-[Application]
-public sealed class MainApplication(IntPtr handle, JniHandleOwnership ownership) : MauiApplication(handle, ownership)
+namespace MementoMori.Exporter.Android
 {
-    protected override MauiApp CreateMauiApp() => MauiProgram.CreateMauiApp();
+    [Application]
+    public sealed class MainApplication : MauiApplication
+    {
+        public MainApplication(IntPtr handle, JniHandleOwnership ownership) : base(handle, ownership)
+        {
+        }
+
+        protected override MauiApp CreateMauiApp() => MauiProgram.CreateMauiApp();
+    }
 }
