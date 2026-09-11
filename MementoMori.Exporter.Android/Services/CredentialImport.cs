@@ -60,7 +60,14 @@ public static class CredentialImport
             throw new InvalidDataException("配置缺少有效的账号登录 ID。");
         var key = Text(value, "ClientKey", "");
         if (string.IsNullOrWhiteSpace(key)) throw new InvalidDataException("配置缺少 ClientKey。");
-        var world = value.TryGetProperty("AutoLoginWorldId", out var w) && w.ValueKind == JsonValueKind.Number && w.TryGetInt64(out var n) ? n : 0;
+
+        // World numbers are bounded protocol identifiers; account IDs remain Int64.
+        var world = 0;
+        if (value.TryGetProperty("AutoLoginWorldId", out var w) && w.ValueKind != JsonValueKind.Null)
+        {
+            if (w.ValueKind != JsonValueKind.Number || !w.TryGetInt32(out world) || world < 0)
+                throw new InvalidDataException("配置中的区服编号无效或超出支持范围。");
+        }
         return new AccountInfo { UserId = userId, ClientKey = key, Name = Text(value, "Name", "导入的账号"),
             AutoLogin = false, AutoLoginWorldId = world };
     }
