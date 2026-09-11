@@ -18,6 +18,8 @@
     <Compile Include="../../MementoMori.Exporter.Android/Services/CredentialImport.cs" Link="CredentialImport.cs" />
     <Compile Include="../../MementoMori.Exporter.Android/Services/MemoryOptions.cs" Link="MemoryOptions.cs" />
     <Compile Include="../../MementoMori.Exporter.Android/Services/MobileSnapshot.cs" Link="MobileSnapshot.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/ExportFileStore.cs" Link="ExportFileStore.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/SavedCredentials.cs" Link="SavedCredentials.cs" />
   </ItemGroup>
   <Target Name="ValidateProtocolReferences" BeforeTargets="PrepareForBuild">
     <Error Condition="!Exists('%(ProjectReference.Identity)')" Text="Required protocol project not found: %(ProjectReference.Identity)" />

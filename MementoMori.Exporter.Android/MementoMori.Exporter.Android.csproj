@@ -10,8 +10,8 @@
     <MauiVersion>9.0.10</MauiVersion>
     <ApplicationTitle>MementoMori 账号导出器</ApplicationTitle>
     <ApplicationId>io.github.iviesever.mementomori.exporter</ApplicationId>
-    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
-    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.2.0</ApplicationDisplayVersion>
+    <ApplicationVersion>2</ApplicationVersion>
     <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
     <AndroidPackageFormats>apk</AndroidPackageFormats>
     <AndroidKeyStore>false</AndroidKeyStore>

@@ -1,6 +1,4 @@
 using Microsoft.Maui.Storage;
-using Microsoft.Maui.ApplicationModel;
-using Microsoft.Maui.ApplicationModel.DataTransfer;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using MementoMori.Ortega.Share.Data.Auth;
@@ -11,64 +9,96 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
 {
     private const string StorageKey = "mementomori.exporter.auth.v1";
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SavedCredentials credentials = new(
+        () => SecureStorage.Default.GetAsync(StorageKey),
+        json => SecureStorage.Default.SetAsync(StorageKey, json),
+        // This app uses SecureStorage only for imported login configuration.
+        // Explicit clear also resets unreadable encrypted preferences; never do it on load failure.
+        () => SecureStorage.Default.RemoveAll());
     private AccountManager Manager => services.GetRequiredService<AccountManager>();
+    public ExportFileStore ExportFiles { get; } = new(FileSystem.CacheDirectory);
     public IReadOnlyList<AccountInfo> Accounts => auth.Value.Accounts;
+    public bool NeedsCredentialRecovery => credentials.NeedsRecovery;
     public long SelectedUserId { get; private set; }
+    public long? SelectedWorldId { get; private set; }
     public DateTimeOffset? FetchedAtUtc { get; private set; }
     public string Summary { get; private set; } = "尚未读取账号数据";
 
     public async Task LoadSavedAsync()
     {
-        var saved = await SecureStorage.Default.GetAsync(StorageKey);
-        if (!string.IsNullOrWhiteSpace(saved)) auth.Replace(CredentialImport.Parse(saved));
-    }
-    public async Task ImportAsync(string json)
-    {
-        var parsed = CredentialImport.Parse(json);
         await gate.WaitAsync();
         try
         {
-            // Persist before replacing memory. A secure-storage failure keeps the old account usable.
-            await SecureStorage.Default.SetAsync(StorageKey, CredentialImport.Serialize(parsed));
-            DropAccounts();
-            auth.Replace(parsed);
+            var saved = await credentials.LoadAsync();
+            if (saved != null) auth.Replace(saved);
         }
         finally { gate.Release(); }
     }
+
+    public async Task ImportAsync(string json)
+    {
+        await gate.WaitAsync();
+        try
+        {
+            var parsed = await credentials.SaveAsync(json);
+            try { DropAccounts(); }
+            finally { auth.Replace(parsed); }
+        }
+        finally { gate.Release(); }
+    }
+
     private void DropAccounts()
     {
-        foreach (var pair in Manager.GetAll())
-        {
-            pair.Value.NetworkManager.Dispose();
-            pair.Value.Funcs.Dispose();
-            Manager.RemoveAccount(pair.Key);
-        }
-        Manager.CurrentUserId = 0;
         SelectedUserId = 0;
+        SelectedWorldId = null;
         FetchedAtUtc = null;
         Summary = "尚未读取账号数据";
+        // AccountManager.RemoveAccount also removes saved account entries. Reset only runtime
+        // objects here, preserving every imported credential even if disposal fails.
+        var configured = auth.Value.Accounts.ToList();
+        try
+        {
+            foreach (var pair in Manager.GetAll())
+            {
+                try
+                {
+                    pair.Value.Funcs.LoginOk = false;
+                    pair.Value.NetworkManager.Dispose();
+                    pair.Value.Funcs.Dispose();
+                }
+                finally { Manager.RemoveAccount(pair.Key); }
+            }
+        }
+        finally
+        {
+            auth.Update(value => value.Accounts = configured);
+            Manager.CurrentUserId = 0;
+        }
     }
+
     public async Task ForgetAsync()
     {
         await gate.WaitAsync();
         try
         {
-            if (!SecureStorage.Default.Remove(StorageKey)) { /* No saved key is also a valid cleared state. */ }
-            DropAccounts();
-            auth.Replace(new AuthOption { Accounts = new List<AccountInfo>() });
-            var shareDir = Path.Combine(FileSystem.CacheDirectory, "sharing-root");
-            if (Directory.Exists(shareDir)) Directory.Delete(shareDir, true);
+            credentials.Clear();
+            try { DropAccounts(); }
+            finally { auth.Replace(new AuthOption { Accounts = new List<AccountInfo>() }); }
+            ExportFiles.Clear();
         }
         finally { gate.Release(); }
     }
+
     public async Task ConnectAsync(long userId, Func<IReadOnlyList<PlayerDataInfo>, Task<long?>> chooseWorld, IProgress<string> progress)
     {
         await gate.WaitAsync();
         try
         {
-            FetchedAtUtc = null;
-            Summary = "正在读取账号";
             if (!Accounts.Any(a => a.UserId == userId)) throw new InvalidOperationException("请选择已导入的账号。");
+            // A fresh protocol object per explicit read avoids carrying the previous world's
+            // cookies, login state or partially updated data into another read. Disk MB cache remains.
+            DropAccounts();
+            Summary = "正在读取账号";
             Manager.CurrentUserId = userId;
             SelectedUserId = userId;
             var account = Manager.Current;
@@ -91,37 +121,40 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
             progress.Report("读取所选区服的账号快照…");
             await Task.Run(async () =>
             {
-                // Bypass Funcs.AutoLogin/Login/AuthLogin: those register jobs and fetch unrelated pages.
+                // Do not call the inherited automatic login/job-registration entry points.
                 await account.NetworkManager.Login(chosenId.Value, _ => { });
                 await account.Funcs.UserGetUserData();
             });
             var data = account.Funcs.UserSyncData;
             if (data.UserStatusDtoInfo == null) throw new InvalidOperationException("服务器没有返回有效账号资料。");
             account.Funcs.LoginOk = true;
+            SelectedWorldId = chosenId.Value;
             FetchedAtUtc = DateTimeOffset.UtcNow;
-            Summary = $"{data.UserStatusDtoInfo.Name} · Rank {data.UserStatusDtoInfo.Rank} · {data.UserCharacterDtoInfos?.Count ?? 0} 个角色";
+            Summary = $"区服 {chosenId.Value} · {data.UserStatusDtoInfo.Name} · Rank {data.UserStatusDtoInfo.Rank} · {data.UserCharacterDtoInfos?.Count ?? 0} 个角色";
             progress.Report("账号读取完成，可以选择内容导出");
         }
-        catch { FetchedAtUtc = null; Summary = "读取未完成，请重试"; throw; }
+        catch
+        {
+            FetchedAtUtc = null;
+            SelectedWorldId = null;
+            Summary = "读取未完成，请重试";
+            throw;
+        }
         finally { gate.Release(); }
     }
-    public async Task<string> ExportAsync(string[] sections, bool splitZip, bool pretty)
+
+    public async Task<string> ExportAsync(long expectedUserId, string[] sections, bool splitZip, bool pretty)
     {
         await gate.WaitAsync();
         try
         {
-            if (FetchedAtUtc is not { } fetched || !Manager.Current.Funcs.LoginOk)
-                throw new InvalidOperationException("请先读取账号。");
-            // Deliberately keep session snapshot semantics. Per-export refresh is a deferred issue.
+            if (FetchedAtUtc is not { } fetched || SelectedUserId != expectedUserId ||
+                Manager.CurrentUserId != expectedUserId || !Manager.Current.Funcs.LoginOk)
+                throw new InvalidOperationException("请先读取当前所选账号。");
+            // Repeated exports deliberately use the last explicitly requested account snapshot.
             var snapshot = await Task.Run(() => MobileSnapshot.BuildAsync(Manager, sections, fetched));
             var bytes = splitZip ? MobileSnapshot.Zip(snapshot, sections) : MobileSnapshot.SerializeSafe(snapshot, pretty);
-            var folder = Path.Combine(FileSystem.CacheDirectory, "sharing-root");
-            Directory.CreateDirectory(folder);
-            foreach (var old in Directory.GetFiles(folder, "mementomori-account-*"))
-                if (File.GetLastWriteTimeUtc(old) < DateTime.UtcNow.AddDays(-1)) File.Delete(old);
-            var path = Path.Combine(folder, $"mementomori-account-{DateTime.Now:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.{(splitZip ? "zip" : "json")}");
-            await File.WriteAllBytesAsync(path, bytes);
-            return path;
+            return await ExportFiles.WriteAsync(bytes, splitZip);
         }
         finally { gate.Release(); }
     }
