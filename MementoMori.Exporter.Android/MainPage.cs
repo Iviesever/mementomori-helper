@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.Json;
 using MementoMori.Exporter.Android.Services;
 using MementoMori.Ortega.Share.Data.Auth;
-using Microsoft.Maui.Controls.Shapes;
+using RoundRectangle = Microsoft.Maui.Controls.Shapes.RoundRectangle;
 
 namespace MementoMori.Exporter.Android;
 
