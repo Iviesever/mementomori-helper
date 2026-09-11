@@ -5,7 +5,7 @@ public sealed class ExportFileStore
 {
     private const string Prefix = "mementomori-account-";
     private readonly string directory;
-    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
+    private static readonly StringComparison PathComparison = global::System.OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     public ExportFileStore(string cacheDirectory)
