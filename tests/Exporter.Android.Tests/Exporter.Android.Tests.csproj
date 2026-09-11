@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+    <ProjectReference Include="../../MementoMori.BlazorShared/MementoMori.BlazorShared.csproj" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/CredentialImport.cs" Link="CredentialImport.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/MemoryOptions.cs" Link="MemoryOptions.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/MobileSnapshot.cs" Link="MobileSnapshot.cs" />
+  </ItemGroup>
+</Project>
