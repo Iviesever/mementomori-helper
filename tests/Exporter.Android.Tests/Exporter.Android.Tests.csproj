@@ -30,6 +30,7 @@
     <Using Include="Microsoft.AspNetCore.Routing" />
     <Using Include="Microsoft.Extensions.Hosting" />
     <Using Include="MementoMori.Extensions" />
+    <Using Include="MementoMori.Ortega.Share.Master" />
     <Compile Include="../../MementoMori.WebUI/SafeExport.cs" Link="DesktopSafeExport.cs" />
     <Compile Include="../../MementoMori.WebUI/SafeExportUi.cs" Link="DesktopSafeExportUi.cs" />
   </ItemGroup>

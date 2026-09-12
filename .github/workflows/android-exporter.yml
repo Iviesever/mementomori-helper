@@ -7,7 +7,13 @@ on:
     branches: [master, feature/android-account-exporter]
     paths:
       - 'MementoMori.Exporter.Android/**'
+      - 'MementoMori.WebUI/**'
+      - 'MementoMori/**'
+      - 'MementoMori.Common/**'
+      - 'MementoMori.Ortega/**'
+      - 'MementoMori.BlazorShared/**'
       - 'tests/Exporter.Android.Tests/**'
+      - 'global.json'
       - '.github/workflows/android-exporter.yml'
   workflow_dispatch:
 
@@ -36,10 +42,16 @@ jobs:
         with:
           distribution: microsoft
           java-version: '21'
-      - name: Contract, storage and sanitization tests (no account needed)
+      - name: Contract, projection, storage and sanitization tests (no account needed)
         shell: pwsh
         run: |
-          dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results
+          New-Item -ItemType Directory -Path artifacts/build-logs -Force | Out-Null
+          dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results -fl "-flp:LogFile=artifacts/build-logs/exporter-tests-build.log;Verbosity=normal"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build complete Windows desktop WebUI project
+        shell: pwsh
+        run: |
+          dotnet build MementoMori.WebUI/MementoMori.WebUI.csproj -c Release "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/desktop-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install Android MAUI workload
         shell: pwsh
