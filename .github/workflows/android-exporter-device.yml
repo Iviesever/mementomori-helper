@@ -47,13 +47,23 @@ jobs:
       - name: Build two isolated versions for account-preserving upgrade tests
         working-directory: MementoMori.Exporter.Android
         run: |
+          set -euo pipefail
+          test -f MementoMori.Exporter.Android.csproj
           dotnet workload install maui-android
           dotnet build -t:InstallAndroidDependencies -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:JavaSdkDirectory="$JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
-          mkdir -p ../artifacts/device-apks
+          mkdir -p ../artifacts/device-apks ../artifacts/device-validation
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          test -n "$aapt"
           for version in 1001 1002; do
+            # Android incremental packaging can reuse the previous manifest when only
+            # ApplicationVersion changes. Clear project build outputs, NOT the signing key.
+            rm -rf -- bin/Debug obj/Debug
             dotnet build -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-x64 -p:ExporterDeviceTests=true -p:ApplicationVersion="$version" -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904' '-clp:ErrorsOnly;Summary'
             mapfile -t apks < <(find bin/Debug -type f -name '*-Signed.apk')
             test "${#apks[@]}" -eq 1
+            badging=$("$aapt" dump badging "${apks[0]}")
+            printf '%s\n' "$badging" > "../artifacts/device-validation/build-version-$version.txt"
+            [[ "$badging" == *"package: name='io.github.iviesever.mementomori.exporter.devicetest' versionCode='$version' "* ]]
             cp "${apks[0]}" "../artifacts/device-apks/version-$version.apk"
           done
       - name: Exercise in-place version upgrade, saved account and system picker
