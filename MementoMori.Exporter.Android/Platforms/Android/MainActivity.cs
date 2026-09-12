@@ -10,10 +10,18 @@ namespace MementoMori.Exporter.Android;
     ConfigChanges.UiMode | ConfigChanges.ScreenLayout | ConfigChanges.SmallestScreenSize | ConfigChanges.Density)]
 public sealed class MainActivity : MauiAppCompatActivity
 {
+#if EXPORTER_DEVICE_TESTS
+    protected override void OnCreate(global::Android.OS.Bundle? savedInstanceState)
+    {
+        base.OnCreate(savedInstanceState);
+        var phase = Intent?.GetStringExtra("exporter_test_phase");
+        if (phase != null)
+            MainThread.BeginInvokeOnMainThread(async () => await Services.DeviceSmoke.RunAsync(this, phase));
+    }
+#endif
     private const int CreateExportRequest = 0x4D45;
     private TaskCompletionSource<global::Android.Net.Uri?>? pendingSave;
 
-    // ACTION_CREATE_DOCUMENT grants access to one user-chosen document, not all external storage.
     public async Task<global::Android.Net.Uri?> ChooseExportDestinationAsync(string fileName, string mimeType)
     {
         if (!MainThread.IsMainThread) throw new InvalidOperationException("The document picker requires the UI thread.");
@@ -31,31 +39,22 @@ public sealed class MainActivity : MauiAppCompatActivity
             StartActivityForResult(intent, CreateExportRequest);
             return await completion.Task;
         }
-        finally
-        {
-            if (ReferenceEquals(pendingSave, completion)) pendingSave = null;
-        }
+        finally { if (ReferenceEquals(pendingSave, completion)) pendingSave = null; }
     }
 
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
         base.OnActivityResult(requestCode, resultCode, data);
         if (requestCode != CreateExportRequest) return;
-        if (resultCode != Result.Ok)
-        {
-            pendingSave?.TrySetResult(null);
-            return;
-        }
+        if (resultCode != Result.Ok) { pendingSave?.TrySetResult(null); return; }
         var uri = data?.Data;
         if (uri == null || uri.Scheme != "content")
             pendingSave?.TrySetException(new IOException("The document provider returned no writable document."));
-        else
-            pendingSave?.TrySetResult(uri);
+        else pendingSave?.TrySetResult(uri);
     }
 
     protected override void OnDestroy()
     {
-        // Do not leave MainPage permanently busy if the Activity is destroyed while picking.
         pendingSave?.TrySetCanceled();
         pendingSave = null;
         base.OnDestroy();

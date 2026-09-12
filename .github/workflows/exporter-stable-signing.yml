@@ -1,12 +1,11 @@
 name: Exporter protected stable signing
 
-# No pull_request, pull_request_target, workflow_run or arbitrary source-ref input.
+# No PR events or arbitrary source-ref input. Private keys never enter the build job.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-
 concurrency:
   group: exporter-stable-signing
   cancel-in-progress: false
@@ -57,14 +56,19 @@ jobs:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 10
-    # Required reviewers and deployment branch restrictions are provisioned in GitHub settings.
-    # Missing environment secrets or pinned identity fails closed; no development-key fallback.
     environment: android-release
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Require device approval for this exact source revision
+        shell: pwsh
+        env:
+          APPROVED_SHA: ${{ vars.DEVICE_VALIDATED_SOURCE_SHA }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:APPROVED_SHA) -or $env:APPROVED_SHA -ne $env:SOURCE_COMMIT) { throw 'This exact revision has no recorded device approval.' }
       - uses: actions/setup-java@v4
         with:
           distribution: microsoft
@@ -73,14 +77,14 @@ jobs:
         with:
           name: exporter-stable-signing-input
           path: signing-input
-      - name: Sign only after environment approval
+      - name: Sign only after environment and exact-source approval
         shell: pwsh
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_SIGNING_CERT_SHA256: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || vars.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_CERT_SHA256: ${{ vars.ANDROID_SIGNING_CERT_SHA256 || vars.ANDROID_CERT_SHA256 }}
           SOURCE_COMMIT: ${{ github.sha }}
           BUILD_COMMIT: ${{ github.sha }}
         run: ./tools/release/Sign-AndroidApk.ps1 -InputApk signing-input/input.apk -OutputDirectory artifacts/signed

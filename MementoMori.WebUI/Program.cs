@@ -28,36 +28,37 @@ internal class Program
 
     public static async Task Main(string[] args)
     {
-        // Explicit offline packaging check: never initialize accounts, network or Quartz.
-        if (args.Contains("--exporter-offline-check", StringComparer.Ordinal))
+        // Offline validation exits through its own host before constructing game services.
+        if (args.Any(a => a is "--exporter-offline-check" or "--exporter-offline-check=true"))
         {
             await OfflineExportCheck.RunAsync();
             return;
         }
+        PortableExportStartup.Prepare(args);
         PlatformRegistrationManager.SetRegistrationNamespaces(RegistrationNamespace.Blazor);
         var builder = WebApplication.CreateBuilder(args);
-
         IFileProvider physicalProvider = new PhysicalFileProvider(Directory.GetCurrentDirectory());
         builder.Services.AddSingleton(physicalProvider);
-
-        builder.Configuration.AddJsonFile(physicalProvider, "appsettings.other.json", true, true);
-        builder.Configuration.AddJsonFile(physicalProvider, "appsettings.user.json", true, true);
-
+        if (!PortableExportStartup.Enabled)
+        {
+            builder.Configuration.AddJsonFile(physicalProvider, "appsettings.other.json", true, true);
+            builder.Configuration.AddJsonFile(physicalProvider, "appsettings.user.json", true, true);
+        }
         builder.Services.AddMudServices();
         builder.Services.AddMudMarkdownServices();
-
-        builder.Services.AddRazorComponents()
-            .AddInteractiveServerComponents();
-
+        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
         builder.Services.AddMementoMori();
         builder.Services.AddMementoMoriBlazorShared();
         builder.Services.AddMementoMoriWebUI();
         builder.Services.AddHttpClient();
-
         builder.Services.AddOptions();
-        builder.Services.ConfigureWritable<AuthOption>(builder.Configuration.GetSection("AuthOption"), "appsettings.user.json");
-        builder.Services.ConfigureWritable<GameConfig>(builder.Configuration.GetSection("GameConfig"), "appsettings.user.json");
-        builder.Services.ConfigureWritable<PlayersOption>(builder.Configuration.GetSection("PlayersOption"), "appsettings.user.json");
+        if (PortableExportStartup.Enabled) PortableExportStartup.Configure(builder);
+        else
+        {
+            builder.Services.ConfigureWritable<AuthOption>(builder.Configuration.GetSection("AuthOption"), "appsettings.user.json");
+            builder.Services.ConfigureWritable<GameConfig>(builder.Configuration.GetSection("GameConfig"), "appsettings.user.json");
+            builder.Services.ConfigureWritable<PlayersOption>(builder.Configuration.GetSection("PlayersOption"), "appsettings.user.json");
+        }
         builder.Services.Configure<StaticFileOptions>(opt =>
         {
             opt.HttpsCompression = HttpsCompressionMode.Compress;
@@ -71,29 +72,22 @@ internal class Program
                 };
             };
         });
-
         builder.Services.AddSingleton(sp =>
         {
             var serverUrl = sp.GetRequiredService<IWritableOptions<GameConfig>>().Value.ServerUrl;
             if (string.IsNullOrEmpty(serverUrl)) serverUrl = "https://github.com";
             return RestService.For<IMemeMoriServerApi>(serverUrl);
         });
-
         builder.Services.AddQuartz();
-        builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
+        if (!PortableExportStartup.Enabled)
+            builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
         var app = builder.Build();
         Services.Setup(app.Services);
-
         if (!app.Environment.IsDevelopment()) app.UseExceptionHandler("/Error");
-
-        app.UseStaticFiles();
+        if (!PortableExportStartup.Enabled) app.UseStaticFiles();
         app.UseAntiforgery();
-
-        var earlySafeExportStart = string.Equals(
-            Environment.GetEnvironmentVariable("MEMENTOMORI_SAFE_EXPORT_EARLY_START"),
-            "1",
-            StringComparison.Ordinal);
-
+        var earlySafeExportStart = PortableExportStartup.Enabled || string.Equals(
+            Environment.GetEnvironmentVariable("MEMENTOMORI_SAFE_EXPORT_EARLY_START"), "1", StringComparison.Ordinal);
         if (earlySafeExportStart)
         {
             app.Use(async (context, next) =>
@@ -104,7 +98,6 @@ internal class Program
                     await context.Response.WriteAsync("safe-export-ui-starting");
                     return;
                 }
-
                 if (string.Equals(context.Request.Path.Value, "/safe-export", StringComparison.OrdinalIgnoreCase))
                 {
                     try
@@ -115,40 +108,28 @@ internal class Program
                     catch (TimeoutException)
                     {
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                        await context.Response.WriteAsJsonAsync(new
-                        {
-                            error = "initialization_timeout",
-                            message = "The helper did not finish initialization within three minutes."
-                        });
+                        await context.Response.WriteAsJsonAsync(new { error = "initialization_timeout", message = "The helper did not finish initialization within three minutes." });
                         return;
                     }
                     catch (Exception e)
                     {
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                        await context.Response.WriteAsJsonAsync(new
-                        {
-                            error = "initialization_failed",
-                            errorType = e.GetBaseException().GetType().Name
-                        });
+                        await context.Response.WriteAsJsonAsync(new { error = "initialization_failed", errorType = e.GetBaseException().GetType().Name });
                         return;
                     }
                 }
                 await next();
             });
         }
-
         SafeExport.Map(app);
-        app.MapRazorComponents<App>()
-            .AddAdditionalAssemblies(typeof(Index).Assembly)
-            .AddInteractiveServerRenderMode();
-
+        if (!PortableExportStartup.Enabled)
+            app.MapRazorComponents<App>().AddAdditionalAssemblies(typeof(Index).Assembly).AddInteractiveServerRenderMode();
         if (!earlySafeExportStart)
         {
             await InitializeAsync(app.Services);
             await app.RunAsync();
             return;
         }
-
         await app.StartAsync();
         try
         {
@@ -168,6 +149,6 @@ internal class Program
         await networkManager.Initialize();
         await networkManager.DownloadMasterCatalog();
         networkManager.SetCultureInfo(CultureInfo.CurrentCulture);
-        await accountManager.AutoLogin();
+        if (!PortableExportStartup.Enabled) await accountManager.AutoLogin();
     }
 }

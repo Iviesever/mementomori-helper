@@ -1,0 +1,68 @@
+name: Android exporter runtime checks
+on:
+  push:
+    branches: ['codex/android-exporter-distribution-validation']
+  pull_request:
+    branches: [master, feature/android-account-exporter, 'codex/android-exporter-*']
+    paths:
+      - 'MementoMori.Exporter.Android/**'
+      - 'MementoMori/**'
+      - 'MementoMori.Common/**'
+      - 'MementoMori.Ortega/**'
+      - 'MementoMori.BlazorShared/**'
+      - 'tools/release/**'
+      - '.github/workflows/android-exporter-device.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: exporter-device-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+      - uses: actions/setup-java@v5
+        with:
+          distribution: microsoft
+          java-version: '21'
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build isolated no-account runtime-test package
+        working-directory: MementoMori.Exporter.Android
+        run: |
+          dotnet workload install maui-android
+          dotnet build -t:InstallAndroidDependencies -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:JavaSdkDirectory="$JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
+          dotnet build -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-x64 -p:ExporterDeviceTests=true -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904' '-clp:ErrorsOnly;Summary'
+      - name: Exercise actual Android storage, restart and system picker cancellation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          profile: pixel_2
+          disable-animations: true
+          script: python3 tools/release/android-smoke.py
+      - name: Upload runtime results and native UI capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-exporter-device-validation
+          path: artifacts/device-validation/
+          if-no-files-found: ignore
+          retention-days: 14

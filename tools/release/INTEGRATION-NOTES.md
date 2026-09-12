@@ -1,0 +1,11 @@
+# PR 7 / PR 8 integration
+
+This follow-up incorporates the concurrent PR 7 commits through de4edf0ee920dfc614b39662bb000c6ae50b050a instead of overwriting them. ProtocolSerialization's default untrusted-data/depth policy, its regression tests, portable credential whitelist, isolated *.devicetest Android package and runtime test runner remain included.
+
+The Windows launcher accepts both root/apphost and app/apphost layouts, plus the optional private ConfigPath parameter. Normal runs select the portable host (no hosted Quartz jobs, in-memory whitelisted login options). Each launch uses an isolated temporary data directory and does not mutate the original config. The explicit offline flag instead takes a minimal host branch before constructing game services. Both bare and =true offline flags are recognized. For diagnostics only the offline path may return bounded console text; live protocol output is discarded.
+
+Test-WindowsPackage.ps1 supports either -PackageDirectory or -Package, preserving the archive/checksum/path-with-spaces validation interface. Package-Windows.ps1 remains available alongside the main CI packaging flow. The new package does not retain a cross-launch master cache; abrupt termination can leave a private session directory, as documented.
+
+Two manually invoked signing entries are retained while the older PR is under review. The new exporter-stable-signing.yml separates compilation and private-key access, uses the same android-release environment and also requires DEVICE_VALIDATED_SOURCE_SHA to equal the exact source revision. Existing ANDROID_KEY_ALIAS / ANDROID_CERT_SHA256 environment variables are accepted as aliases. Prefer this split-build workflow for future signing. Do not alternate versionCode schemes after the first stable release without planning a monotonically increasing sequence. Environment required reviewers and branch restrictions still require actual GitHub setup; no workflow or test substitutes for that approval.
+
+No physical device approval is recorded by CI. The automated Android emulator uses a separate package, synthetic credentials and temporary storage, not a user account. Its SecureStorage/restart/picker checks are not real-game login or production upgrade tests. All result claims must refer to the exact integrated commit's CI, not the pre-integration build.
