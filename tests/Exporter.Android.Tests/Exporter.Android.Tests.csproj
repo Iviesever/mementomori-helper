@@ -18,6 +18,20 @@
     <Compile Include="../../MementoMori.Exporter.Android/Services/CredentialImport.cs" Link="CredentialImport.cs" />
     <Compile Include="../../MementoMori.Exporter.Android/Services/MemoryOptions.cs" Link="MemoryOptions.cs" />
     <Compile Include="../../MementoMori.Exporter.Android/Services/MobileSnapshot.cs" Link="MobileSnapshot.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/ExportFileStore.cs" Link="ExportFileStore.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/SavedCredentials.cs" Link="SavedCredentials.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/TransferSignIn.cs" Link="TransferSignIn.cs" />
+    <Compile Include="../../MementoMori.Exporter.Android/Services/ExportSelection.cs" Link="ExportSelection.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="MementoMori.Extensions" />
+    <Compile Include="../../MementoMori.WebUI/SafeExport.cs" Link="DesktopSafeExport.cs" />
+    <Compile Include="../../MementoMori.WebUI/SafeExportUi.cs" Link="DesktopSafeExportUi.cs" />
   </ItemGroup>
   <Target Name="ValidateProtocolReferences" BeforeTargets="PrepareForBuild">
     <Error Condition="!Exists('%(ProjectReference.Identity)')" Text="Required protocol project not found: %(ProjectReference.Identity)" />

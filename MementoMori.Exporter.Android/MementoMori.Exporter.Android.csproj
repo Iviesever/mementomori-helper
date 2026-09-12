@@ -10,8 +10,8 @@
     <MauiVersion>9.0.10</MauiVersion>
     <ApplicationTitle>MementoMori 账号导出器</ApplicationTitle>
     <ApplicationId>io.github.iviesever.mementomori.exporter</ApplicationId>
-    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
-    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.3.1</ApplicationDisplayVersion>
+    <ApplicationVersion>4</ApplicationVersion>
     <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
     <AndroidPackageFormats>apk</AndroidPackageFormats>
     <AndroidKeyStore>false</AndroidKeyStore>
@@ -26,7 +26,6 @@
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#F4F6FB" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F4F6FB" BaseSize="128,128" />
     <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
-    <!-- AddQuartz is in the DI integration package, not the base Quartz assembly. -->
     <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
     <ProjectReference Include="../MementoMori.BlazorShared/MementoMori.BlazorShared.csproj" />
   </ItemGroup>

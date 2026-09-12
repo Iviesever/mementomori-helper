@@ -2,9 +2,9 @@ name: Android account exporter (preview)
 
 on:
   push:
-    branches: [feature/android-account-exporter]
+    branches: [feature/android-account-exporter, 'codex/android-exporter-*']
   pull_request:
-    branches: [master]
+    branches: [master, feature/android-account-exporter]
     paths:
       - 'MementoMori.Exporter.Android/**'
       - 'tests/Exporter.Android.Tests/**'
@@ -26,6 +26,7 @@ jobs:
       DOTNET_CLI_UI_LANGUAGE: en-US
       DOTNET_NOLOGO: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -35,7 +36,7 @@ jobs:
         with:
           distribution: microsoft
           java-version: '21'
-      - name: Contract and sanitization tests (no account needed)
+      - name: Contract, storage and sanitization tests (no account needed)
         shell: pwsh
         run: |
           dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results
@@ -53,7 +54,8 @@ jobs:
       - name: Build self-contained preview APK
         shell: pwsh
         run: |
-          dotnet build MementoMori.Exporter.Android/MementoMori.Exporter.Android.csproj -c Debug -f net9.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:AndroidUseSharedRuntime=false "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }}
+          New-Item -ItemType Directory -Path artifacts/build-logs -Force | Out-Null
+          dotnet build MementoMori.Exporter.Android/MementoMori.Exporter.Android.csproj -c Debug -f net9.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:AndroidUseSharedRuntime=false "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }} "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/android-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $apk = Get-ChildItem MementoMori.Exporter.Android/bin/Debug -Recurse -Filter '*-Signed.apk' | Select-Object -First 1
           if (-not $apk) { throw 'Build did not produce a signed APK.' }
@@ -61,6 +63,17 @@ jobs:
           Copy-Item $apk.FullName artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk
           $hash = Get-FileHash artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -Algorithm SHA256
           "$($hash.Hash)  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content artifacts/apk/SHA256SUMS.txt -Encoding ascii
+          $buildCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @{
+            sourceCommit = $env:SOURCE_COMMIT
+            buildCommit = $buildCommit
+            workflowRun = '${{ github.run_id }}'
+            applicationVersion = '${{ github.run_number }}'
+            signing = 'ephemeral-development-key'
+            architecture = 'android-arm64'
+            sha256 = $hash.Hash
+          } | ConvertTo-Json | Set-Content artifacts/apk/BUILD-INFO.json -Encoding utf8
       - name: Upload preview APK
         uses: actions/upload-artifact@v4
         with:
@@ -75,3 +88,11 @@ jobs:
           name: android-exporter-test-results
           path: artifacts/test-results/
           if-no-files-found: ignore
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-exporter-build-logs
+          path: artifacts/build-logs/
+          if-no-files-found: ignore
+          retention-days: 14
