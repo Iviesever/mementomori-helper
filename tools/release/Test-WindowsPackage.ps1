@@ -7,7 +7,12 @@ if (Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object { $_.Name 
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
 $runner = Join-Path $package 'Start-Exporter.ps1'
-$process = Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $runner + '"'),'-OfflineCheck','-NoBrowser','-Port',$port) -PassThru -WindowStyle Hidden
+$logs = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../artifacts/build-logs'))
+New-Item -ItemType Directory $logs -Force | Out-Null
+$outLog = Join-Path $logs 'offline-launcher.out.log'
+$errLog = Join-Path $logs 'offline-launcher.err.log'
+# This is hard-coded offline mode; no real/private account config is passed to the process.
+$process = Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $runner + '"'),'-OfflineCheck','-NoBrowser','-Port',$port) -PassThru -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog
 try {
     $base = "http://127.0.0.1:$port"
     $ready = $false
@@ -31,4 +36,7 @@ try {
 } finally {
     if (-not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F | Out-Null }
     $process.Dispose()
+    foreach ($log in @($outLog, $errLog)) {
+        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 80 | Write-Host }
+    }
 }
