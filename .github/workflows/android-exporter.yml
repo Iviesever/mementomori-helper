@@ -13,8 +13,9 @@ on:
       - 'MementoMori.Ortega/**'
       - 'MementoMori.BlazorShared/**'
       - 'tests/Exporter.Android.Tests/**'
+      - 'tools/release/**'
       - 'global.json'
-      - '.github/workflows/android-exporter.yml'
+      - '.github/workflows/android-exporter*.yml'
   workflow_dispatch:
 
 permissions:
@@ -35,9 +36,25 @@ jobs:
       SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive exact public build source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory artifacts/source -Force | Out-Null
+          git archive --format=zip -o artifacts/source/source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git rev-parse HEAD | Set-Content artifacts/source/COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exporter-build-source
+          path: artifacts/source/
+          retention-days: 7
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: |
+            9.0.x
+            10.0.x
       - uses: actions/setup-java@v4
         with:
           distribution: microsoft
@@ -46,46 +63,50 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts/build-logs -Force | Out-Null
-          dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results -fl "-flp:LogFile=artifacts/build-logs/exporter-tests-build.log;Verbosity=normal"
+          dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results -p:NuGetAudit=true -p:NuGetAuditMode=all -p:NuGetAuditLevel=low "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" -fl "-flp:LogFile=artifacts/build-logs/exporter-tests-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build complete Windows desktop WebUI project
         shell: pwsh
         run: |
-          dotnet build MementoMori.WebUI/MementoMori.WebUI.csproj -c Release "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/desktop-build.log;Verbosity=normal"
+          dotnet build MementoMori.WebUI/MementoMori.WebUI.csproj -c Release -p:NuGetAudit=true -p:NuGetAuditMode=all "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/desktop-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Install Android MAUI workload
+      - name: Install supported Android MAUI workload
         shell: pwsh
+        working-directory: MementoMori.Exporter.Android
         run: |
-          dotnet workload install maui-android --skip-manifest-update
+          dotnet workload install maui-android
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install matching Android SDK dependencies
         shell: pwsh
+        working-directory: MementoMori.Exporter.Android
         run: |
-          dotnet build MementoMori.Exporter.Android/MementoMori.Exporter.Android.csproj -t:InstallAndroidDependencies -f net9.0-android "-p:AndroidSdkDirectory=$env:ANDROID_HOME" "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
+          dotnet build -t:InstallAndroidDependencies -f net10.0-android "-p:AndroidSdkDirectory=$env:ANDROID_HOME" "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build self-contained preview APK
         shell: pwsh
+        working-directory: MementoMori.Exporter.Android
         run: |
-          New-Item -ItemType Directory -Path artifacts/build-logs -Force | Out-Null
-          dotnet build MementoMori.Exporter.Android/MementoMori.Exporter.Android.csproj -c Debug -f net9.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:AndroidUseSharedRuntime=false "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }} "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/android-build.log;Verbosity=normal"
+          dotnet build -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:NuGetAudit=true -p:NuGetAuditMode=all "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=../artifacts/build-logs/android-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $apk = Get-ChildItem MementoMori.Exporter.Android/bin/Debug -Recurse -Filter '*-Signed.apk' | Select-Object -First 1
-          if (-not $apk) { throw 'Build did not produce a signed APK.' }
-          New-Item -ItemType Directory -Path artifacts/apk -Force | Out-Null
-          Copy-Item $apk.FullName artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk
-          $hash = Get-FileHash artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -Algorithm SHA256
-          "$($hash.Hash)  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content artifacts/apk/SHA256SUMS.txt -Encoding ascii
+          $apk = @(Get-ChildItem bin/Debug -Recurse -Filter '*-Signed.apk')
+          if ($apk.Count -ne 1) { throw 'Expected exactly one signed APK.' }
+          New-Item -ItemType Directory ../artifacts/apk -Force | Out-Null
+          Copy-Item $apk[0].FullName ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk
+          $hash = Get-FileHash ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -Algorithm SHA256
+          "$($hash.Hash)  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content ../artifacts/apk/SHA256SUMS.txt -Encoding ascii
           $buildCommit = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $project = [xml](Get-Content MementoMori.Exporter.Android.csproj -Raw)
           @{
             sourceCommit = $env:SOURCE_COMMIT
             buildCommit = $buildCommit
             workflowRun = '${{ github.run_id }}'
-            applicationVersion = '${{ github.run_number }}'
-            signing = 'ephemeral-development-key'
+            applicationVersion = [string]$project.Project.PropertyGroup.ApplicationVersion
+            applicationDisplayVersion = [string]$project.Project.PropertyGroup.ApplicationDisplayVersion
+            signing = 'ephemeral-development-key-NOT-UPDATE-COMPATIBLE'
             architecture = 'android-arm64'
             sha256 = $hash.Hash
-          } | ConvertTo-Json | Set-Content artifacts/apk/BUILD-INFO.json -Encoding utf8
+          } | ConvertTo-Json | Set-Content ../artifacts/apk/BUILD-INFO.json -Encoding utf8
       - name: Upload preview APK
         uses: actions/upload-artifact@v4
         with:
