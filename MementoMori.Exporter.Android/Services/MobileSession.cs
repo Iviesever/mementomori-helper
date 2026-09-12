@@ -2,6 +2,7 @@ using Microsoft.Maui.Storage;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using MementoMori.Ortega.Share.Data.Auth;
+using MementoMori.Funcs;
 
 namespace MementoMori.Exporter.Android.Services;
 
@@ -12,8 +13,8 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
     private readonly SavedCredentials credentials = new(
         () => SecureStorage.Default.GetAsync(StorageKey),
         json => SecureStorage.Default.SetAsync(StorageKey, json),
-        // This app uses SecureStorage only for imported login configuration.
-        // Explicit clear also resets unreadable encrypted preferences; never do it on load failure.
+        // Only login configuration is stored here, whether imported or obtained by transfer login.
+        // Never clear unreadable encrypted preferences without an explicit user request.
         () => SecureStorage.Default.RemoveAll());
     private AccountManager Manager => services.GetRequiredService<AccountManager>();
     public ExportFileStore ExportFiles { get; } = new(FileSystem.CacheDirectory);
@@ -35,6 +36,43 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         finally { gate.Release(); }
     }
 
+    public async Task<long> SignInAsync(string code, string password, string? accountName)
+    {
+        await gate.WaitAsync();
+        try
+        {
+            var parsed = await TransferSignIn.SignInAsync(auth.Value, code, password, accountName,
+                credentials, ExchangeClientKeyAsync);
+            var userId = TransferSignIn.ParseTransferCode(code);
+            try { DropAccounts(); }
+            finally { auth.Replace(parsed); }
+            return userId;
+        }
+        finally { gate.Release(); }
+    }
+
+    private Task<string> ExchangeClientKeyAsync(long userId, string password) => Task.Run(async () =>
+    {
+        // A standalone protocol session: never insert a placeholder account into AccountManager.
+        // GetClientKey uses the existing createUser -> getComebackUserData -> comebackUser exchange.
+        using var network = services.GetRequiredService<MementoNetworkManager>();
+        using var funcs = services.GetRequiredService<MementoMoriFuncs>();
+        network.UserId = userId;
+        network.DisableAutoUpdateMasterData = true;
+        funcs.UserId = userId;
+        funcs.NetworkManager = network;
+        try
+        {
+            await network.Initialize(_ => { });
+            return await funcs.GetClientKey(password);
+        }
+        finally
+        {
+            // The inherited functions keep an in-memory message collection. Do not retain it.
+            funcs.MesssageList.Clear();
+        }
+    });
+
     public async Task ImportAsync(string json)
     {
         await gate.WaitAsync();
@@ -53,8 +91,6 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         SelectedWorldId = null;
         FetchedAtUtc = null;
         Summary = "尚未读取账号数据";
-        // AccountManager.RemoveAccount also removes saved account entries. Reset only runtime
-        // objects here, preserving every imported credential even if disposal fails.
         var configured = auth.Value.Accounts.ToList();
         try
         {
@@ -83,7 +119,15 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         {
             credentials.Clear();
             try { DropAccounts(); }
-            finally { auth.Replace(new AuthOption { Accounts = new List<AccountInfo>() }); }
+            finally
+            {
+                // A new transfer login must work immediately after clearing, without restarting.
+                auth.Replace(new AuthOption
+                {
+                    Accounts = new List<AccountInfo>(), AuthUrl = CredentialImport.DefaultAuthUrl,
+                    AppVersion = "3.2.2", DeviceToken = "", OSVersion = "Android", ModelName = "Android"
+                });
+            }
             ExportFiles.Clear();
         }
         finally { gate.Release(); }
@@ -94,9 +138,7 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         await gate.WaitAsync();
         try
         {
-            if (!Accounts.Any(a => a.UserId == userId)) throw new InvalidOperationException("请选择已导入的账号。");
-            // A fresh protocol object per explicit read avoids carrying the previous world's
-            // cookies, login state or partially updated data into another read. Disk MB cache remains.
+            if (!Accounts.Any(a => a.UserId == userId)) throw new InvalidOperationException("请选择已保存的账号。");
             DropAccounts();
             Summary = "正在读取账号";
             Manager.CurrentUserId = userId;
@@ -106,7 +148,7 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
             account.NetworkManager.DisableAutoUpdateMasterData = true;
             var worlds = await Task.Run(async () =>
             {
-                progress.Report("连接游戏服务器…");
+                progress.Report("连接游戏服务器…已保存的账号无需再输入密码");
                 await account.NetworkManager.Initialize(_ => { });
                 progress.Report("检查并下载基础数据…首次读取可能较久");
                 await account.NetworkManager.DownloadMasterCatalog(_ => { });
@@ -116,12 +158,12 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
             });
             if (worlds.Count == 0) throw new InvalidOperationException("账号没有可用的区服。");
             var chosenId = await chooseWorld(worlds);
-            if (chosenId == null) { Summary = "已取消选择区服"; return; }
+            if (chosenId == null) { Summary = "已取消选择区服。账号仍已保存在本机，可再次读取。"; return; }
             if (!worlds.Any(w => w.WorldId == chosenId.Value)) throw new InvalidOperationException("区服不匹配。");
             progress.Report("读取所选区服的账号快照…");
             await Task.Run(async () =>
             {
-                // Do not call the inherited automatic login/job-registration entry points.
+                // Never invoke the inherited automatic login/job-registration entry points.
                 await account.NetworkManager.Login(chosenId.Value, _ => { });
                 await account.Funcs.UserGetUserData();
             });
@@ -137,7 +179,7 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         {
             FetchedAtUtc = null;
             SelectedWorldId = null;
-            Summary = "读取未完成，请重试";
+            Summary = "读取未完成，请重试。已保存的账号仍会保留。";
             throw;
         }
         finally { gate.Release(); }
@@ -151,7 +193,6 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
             if (FetchedAtUtc is not { } fetched || SelectedUserId != expectedUserId ||
                 Manager.CurrentUserId != expectedUserId || !Manager.Current.Funcs.LoginOk)
                 throw new InvalidOperationException("请先读取当前所选账号。");
-            // Repeated exports deliberately use the last explicitly requested account snapshot.
             var snapshot = await Task.Run(() => MobileSnapshot.BuildAsync(Manager, sections, fetched));
             var bytes = splitZip ? MobileSnapshot.Zip(snapshot, sections) : MobileSnapshot.SerializeSafe(snapshot, pretty);
             return await ExportFiles.WriteAsync(bytes, splitZip);
