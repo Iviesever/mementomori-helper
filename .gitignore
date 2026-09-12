@@ -40,3 +40,6 @@ artifacts/
 *.p12
 *.pfx
 *.key
+
+# Python release-check bytecode.
+__pycache__/

@@ -31,7 +31,8 @@ try {
     foreach ($name in @('first','second','release')) {
         $info = Get-Content (Join-Path $root "$name/BUILD-INFO.json") -Raw | ConvertFrom-Json
         if ($info.certificateSha256 -ne $expected -or $info.signing -ne 'disposable-test-key') { throw 'Signing fixture identity mismatch.' }
-        if ($info.packageName -ne 'io.github.iviesever.mementomori.exporter' -or [long]$info.applicationVersion -lt 1 -or [string]::IsNullOrWhiteSpace($info.displayVersion)) { throw 'Signed APK version provenance is missing.' }
+        $package = if ($name -eq 'release') { 'io.github.iviesever.mementomori.exporter' } else { 'io.github.iviesever.mementomori.exporter.dev' }
+        if ($info.packageName -ne $package -or [long]$info.applicationVersion -lt 1 -or [string]::IsNullOrWhiteSpace($info.displayVersion)) { throw 'Signed APK version provenance is missing.' }
         $sourceApk = if ($name -eq 'release') { $ReleaseApk } else { $InputApk }
         if ($info.inputSha256 -ne (Get-FileHash $sourceApk -Algorithm SHA256).Hash) { throw 'Signed APK input provenance mismatch.' }
     }

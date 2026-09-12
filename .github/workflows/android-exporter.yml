@@ -18,6 +18,12 @@ on:
       - 'Directory.Build.props'
       - 'global.json'
   workflow_dispatch:
+    inputs:
+      physical_acceptance_apk:
+        description: 'Produce an isolated .dev APK for phone acceptance; never a daily update'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +72,8 @@ jobs:
             if ($parseErrors.Count -gt 0) { throw "Invalid PowerShell syntax in $($_.Name)" }
           }
           ./tools/release/Test-ApkSigningIdentity.ps1
+          python tools/release/test_android_update_checks.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Contract, protocol, projection and storage tests
         shell: pwsh
         run: |
@@ -153,7 +161,7 @@ jobs:
         run: |
           dotnet build MementoMori.Exporter.Android.csproj -t:InstallAndroidDependencies -f net10.0-android "-p:AndroidSdkDirectory=$env:ANDROID_HOME" "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build self-contained preview APK
+      - name: Build isolated development APK (not a daily-use update)
         run: |
           dotnet build MementoMori.Exporter.Android.csproj -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }} "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=../artifacts/build-logs/android-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -181,7 +189,7 @@ jobs:
           "$hash  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content ../artifacts/apk/SHA256SUMS.txt -Encoding ascii
           $badging = (& (Join-Path $signer.Directory.FullName 'aapt.exe') dump badging $output) -join "`n"
           if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
-          if ($badging -notmatch "(?m)^package: name='io\.github\.iviesever\.mementomori\.exporter' versionCode='(?<code>[0-9]+)' versionName='(?<version>[^']+)'") { throw 'Unexpected APK identity or version.' }
+          if ($badging -notmatch "(?m)^package: name='io\.github\.iviesever\.mementomori\.exporter\.dev' versionCode='(?<code>[0-9]+)' versionName='(?<version>[^']+)'") { throw 'Unexpected APK identity or version.' }
           $manifestVersionCode = [string]$Matches['code']
           $manifestVersionName = [string]$Matches['version']
           [xml]$project = Get-Content MementoMori.Exporter.Android.csproj
@@ -193,18 +201,49 @@ jobs:
             sourceCommit = $env:SOURCE_COMMIT; buildCommit = $buildCommit; workflowRun = '${{ github.run_id }}'
             applicationVersion = $manifestVersionCode; displayVersion = $manifestVersionName
             signing = 'ephemeral-development-key'; certificateSha256 = $fingerprint
+            distribution = 'ci-test-only-not-for-updating'; packageName = 'io.github.iviesever.mementomori.exporter.dev'
             architecture = 'android-arm64'; sha256 = $hash; realDeviceTest = 'not-performed'
           } | ConvertTo-Json | Set-Content ../artifacts/apk/BUILD-INFO.json -Encoding utf8
       - name: Compile the same Release signing input used by the protected workflow
         run: ../tools/release/Build-AndroidRelease.ps1 -OutputDirectory ../artifacts/release-input -VersionCode ${{ github.run_number }}
       - name: Test signing identity and failure cleanup with disposable CI key
         run: ../tools/release/Test-AndroidSigning.ps1 -InputApk ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -ReleaseApk ../artifacts/release-input/input.apk
+      - name: Prepare explicitly requested physical acceptance package
+        if: github.event_name == 'workflow_dispatch' && inputs.physical_acceptance_apk
+        run: |
+          $root = '../artifacts/physical-acceptance'
+          New-Item -ItemType Directory $root -Force | Out-Null
+          $name = 'MementoMori-Exporter-PHONE-ACCEPTANCE-ONLY-dev-arm64.apk'
+          Copy-Item ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk "$root/$name"
+          Copy-Item ../artifacts/apk/APK-SIGNATURE.txt "$root/APK-SIGNATURE.txt"
+          $info = Get-Content ../artifacts/apk/BUILD-INFO.json -Raw | ConvertFrom-Json
+          if ($info.sourceCommit -ne '${{ github.sha }}' -or $info.buildCommit -ne '${{ github.sha }}') { throw 'Acceptance APK must match this exact source.' }
+          $info.distribution = 'physical-acceptance-only-not-a-daily-update'
+          $info | ConvertTo-Json | Set-Content "$root/BUILD-INFO.json" -Encoding utf8
+          $hash = (Get-FileHash "$root/$name" -Algorithm SHA256).Hash
+          "$hash  $name" | Set-Content "$root/SHA256SUMS.txt" -Encoding ascii
+          @'
+          PHONE ACCEPTANCE ONLY. Isolated .dev package with a temporary development certificate.
+          Keep the existing normal exporter installed. This is not a daily update or an upgrade-retention test.
+          Do not enter real credentials into CI or upload private account data with acceptance reports.
+          The owner must report actual device acceptance for the exact source before stable signing is approved.
+          '@ | Set-Content "$root/READ-ME-FIRST.txt" -Encoding utf8
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.physical_acceptance_apk
         with:
-          name: mementomori-exporter-android-arm64-preview
-          path: artifacts/apk/
+          name: exporter-phone-acceptance-only-dev-arm64
+          path: artifacts/physical-acceptance/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
+      # Do not distribute disposable-key APKs as updates. Only the protected stable
+      # signing workflow may publish the daily-use Android package.
+      - name: Record Android update distribution policy
+        run: |
+          @'
+          Android CI produced internal development/signing-test APKs only.
+          Daily-use APK: run Exporter protected stable signing after one-time key setup.
+          Never uninstall a working exporter to install an APK from this CI job.
+          '@ | Set-Content ../artifacts/build-logs/ANDROID-DISTRIBUTION.txt -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: always()
         with:

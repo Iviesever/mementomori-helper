@@ -33,7 +33,7 @@ internal static class DeviceSmoke
                 checks.Add("real-android-secure-storage-write");
                 checks.Add("real-private-export-write");
             }
-            else if (phase == "restore")
+            else if (phase is "restore" or "upgrade-restore")
             {
                 var saved = await credentials.LoadAsync();
                 if (saved?.Accounts.Single().UserId != 123) throw new InvalidOperationException();
@@ -45,7 +45,8 @@ internal static class DeviceSmoke
                 if (await credentials.LoadAsync() != null) throw new InvalidOperationException();
                 files.Clear();
                 File.Delete(pathRecord);
-                checks.Add("secure-storage-survives-process-restart");
+                checks.Add(phase == "upgrade-restore" ? "secure-storage-survives-package-upgrade" : "secure-storage-survives-process-restart");
+                if (phase == "upgrade-restore" && AppInfo.Current.BuildString != "1002") throw new InvalidOperationException();
                 checks.Add("export-copy-and-explicit-clear");
             }
             else if (phase == "picker-cancel")
@@ -56,7 +57,7 @@ internal static class DeviceSmoke
                 checks.Add("real-document-picker-cancel-releases-waiter");
             }
             else throw new ArgumentException();
-            await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(new { passed = true, phase, checks, realGameLogin = false }));
+            await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(new { passed = true, phase, checks, versionCode = AppInfo.Current.BuildString, realGameLogin = false }));
         }
         catch (Exception e)
         {

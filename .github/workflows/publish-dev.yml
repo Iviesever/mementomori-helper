@@ -7,9 +7,17 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Explicitly publish public desktop releases and configured Docker images'
+        type: boolean
+        required: true
+        default: false
 
 jobs:
   publish:
+    # This fork must not publish public releases merely to register Android workflows.
+    if: github.repository == 'moonheart/mementomori-helper' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     strategy:
       matrix:
         rid: [ win-x64, linux-x64, linux-arm64, linux-arm, osx-x64, osx-arm64 ]
@@ -55,6 +63,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
   publish-docker:
+    if: github.repository == 'moonheart/mementomori-helper' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +116,7 @@ jobs:
           file: ./MementoMori.WebUI/Dockerfile
 
   publish-maui-android:
+    if: github.repository == 'moonheart/mementomori-helper' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -143,4 +153,3 @@ jobs:
             ./publish-android/io.github.moonheart.mementomorihelper-Signed.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
