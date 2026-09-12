@@ -34,6 +34,8 @@ internal static class PortableExportStartup
         builder.Logging.ClearProviders();
         if (OfflineCheck) builder.Logging.AddSimpleConsole();
         builder.Configuration.Sources.Clear();
+        // Keep a writable provider for host settings without restoring external configuration.
+        builder.Configuration.AddInMemoryCollection();
         var rawPort = Environment.GetEnvironmentVariable("MEMENTOMORI_EXPORTER_PORT") ?? "5001";
         if (!int.TryParse(rawPort, out var port) || port is < 1024 or > 65535)
             throw new InvalidDataException("Invalid local exporter port.");
