@@ -28,7 +28,14 @@ if (Get-ChildItem -LiteralPath $packagePath -Recurse -File | Where-Object { $_.N
 }
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
-$runner = Join-Path $packagePath 'Start-Exporter.ps1'
+# Exercise the user-visible CMD, including its relative app/ path and exit code.
+$runner = Join-Path $packagePath 'START-EXPORTER.cmd'
+foreach ($required in @('START-EXPORTER.cmd','app/Start-Exporter.ps1','app/MementoMori.WebUI.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $packagePath $required) -PathType Leaf)) { throw "Missing outer-launcher package file: $required" }
+}
+foreach ($misplaced in @('Start-Exporter.ps1','MementoMori.WebUI.exe','app/START-EXPORTER.cmd')) {
+    if (Test-Path -LiteralPath (Join-Path $packagePath $misplaced)) { throw "Launcher/runtime file is in the wrong layer: $misplaced" }
+}
 $logs = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../artifacts/build-logs'))
 New-Item -ItemType Directory $logs -Force | Out-Null
 $outLog = Join-Path $logs 'offline-launcher.out.log'
@@ -38,7 +45,10 @@ $oldData = $env:MEMENTOMORI_EXPORTER_DATA_DIR
 $env:MEMENTOMORI_EXPORTER_DATA_DIR = $work
 $process = $null
 try {
-    $process = Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $runner + '"'),'-OfflineCheck','-NoBrowser','-Port',$port) -PassThru -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+    # CMD /s /c needs an enclosing quote pair in addition to the quoted script path.
+    $arguments = '/d /s /c ""' + $runner + '" -OfflineCheck -NoBrowser -Port ' + $port + '"'
+    $process = Start-Process -FilePath $env:ComSpec -ArgumentList $arguments -WorkingDirectory $work -PassThru -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog
     $base = "http://127.0.0.1:$port"
     $ready = $false
     for ($i = 0; $i -lt 80; $i++) {
@@ -60,7 +70,7 @@ try {
     if (Test-Path -LiteralPath $work) {
         if (Get-ChildItem -LiteralPath $work -Filter appsettings.user.json -Recurse -File) { throw 'Offline check unexpectedly wrote an account configuration.' }
     }
-    Write-Host 'PASS: self-contained apphost, PowerShell launcher, real export UI, offline refusal, graceful shutdown and no account config.'
+    Write-Host 'PASS: outer CMD launcher, nested app runtime, unrelated working directory, real export UI, offline refusal, graceful shutdown and no account config.'
 } finally {
     if ($null -ne $process) {
         if (-not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F | Out-Null }

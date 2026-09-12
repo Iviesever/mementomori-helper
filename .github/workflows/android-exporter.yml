@@ -74,9 +74,10 @@ jobs:
       - name: Publish complete self-contained Windows package
         shell: pwsh
         run: |
-          dotnet publish MementoMori.WebUI/MementoMori.WebUI.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false -o artifacts/windows/runtime "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/windows-publish.log;Verbosity=normal"
+          dotnet publish MementoMori.WebUI/MementoMori.WebUI.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false -o artifacts/windows/runtime/app "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/windows-publish.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item tools/release/Start-Exporter.ps1,tools/release/START-EXPORTER.cmd,tools/release/WINDOWS-README.md,LICENSE artifacts/windows/runtime/
+          Copy-Item tools/release/Start-Exporter.ps1 artifacts/windows/runtime/app/
+          Copy-Item tools/release/START-EXPORTER.cmd,tools/release/WINDOWS-README.md,LICENSE artifacts/windows/runtime/
       - name: Audit Windows dependency graph
         shell: pwsh
         run: ./tools/release/Test-DependencyAudit.ps1 -Project MementoMori.WebUI/MementoMori.WebUI.csproj -OutputPath artifacts/security/windows-dependencies.json
