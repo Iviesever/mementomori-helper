@@ -2,7 +2,7 @@ name: Android account exporter (preview)
 
 on:
   push:
-    branches: [feature/android-account-exporter, 'codex/android-exporter-*']
+    branches: [feature/android-account-exporter]
   pull_request:
     branches: [master, feature/android-account-exporter]
     paths:
@@ -17,14 +17,11 @@ on:
       - 'global.json'
       - '.github/workflows/android-exporter*.yml'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: android-exporter-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   apk:
     runs-on: windows-2022
@@ -55,7 +52,7 @@ jobs:
           dotnet-version: |
             9.0.x
             10.0.x
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: microsoft
           java-version: '21'
@@ -70,6 +67,21 @@ jobs:
         run: |
           dotnet build MementoMori.WebUI/MementoMori.WebUI.csproj -c Release -p:NuGetAudit=true -p:NuGetAuditMode=all "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/desktop-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Signing input validation with disposable synthetic key
+        shell: pwsh
+        run: ./tools/release/Test-SigningPreflight.ps1
+      - name: Publish Windows self-contained distribution
+        shell: pwsh
+        run: ./tools/release/Package-Windows.ps1
+      - name: Test shipped Windows launcher without a game account
+        shell: pwsh
+        run: ./tools/release/Test-WindowsPackage.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mementomori-exporter-windows-x64-preview
+          path: artifacts/windows/MementoMori-Exporter-win-x64-preview.zip
+          if-no-files-found: error
+          retention-days: 14
       - name: Install supported Android MAUI workload
         shell: pwsh
         working-directory: MementoMori.Exporter.Android
@@ -101,8 +113,8 @@ jobs:
             sourceCommit = $env:SOURCE_COMMIT
             buildCommit = $buildCommit
             workflowRun = '${{ github.run_id }}'
-            applicationVersion = [string]$project.Project.PropertyGroup.ApplicationVersion
-            applicationDisplayVersion = [string]$project.Project.PropertyGroup.ApplicationDisplayVersion
+            applicationVersion = $project.SelectSingleNode('/Project/PropertyGroup/ApplicationVersion').InnerText
+            applicationDisplayVersion = $project.SelectSingleNode('/Project/PropertyGroup/ApplicationDisplayVersion').InnerText
             signing = 'ephemeral-development-key-NOT-UPDATE-COMPATIBLE'
             architecture = 'android-arm64'
             sha256 = $hash.Hash
@@ -127,5 +139,13 @@ jobs:
         with:
           name: android-exporter-build-logs
           path: artifacts/build-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload runtime validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exporter-runtime-validation
+          path: artifacts/validation/
           if-no-files-found: ignore
           retention-days: 14

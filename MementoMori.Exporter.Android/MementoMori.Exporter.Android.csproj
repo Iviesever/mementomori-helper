@@ -21,6 +21,13 @@
     <RunAOTCompilation>false</RunAOTCompilation>
     <AndroidLinkMode>None</AndroidLinkMode>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(ExporterDeviceTests)' == 'true' and '$(Configuration)' == 'Debug'">
+    <DefineConstants>$(DefineConstants);EXPORTER_DEVICE_TESTS</DefineConstants>
+    <ApplicationId>io.github.iviesever.mementomori.exporter.devicetest</ApplicationId>
+  </PropertyGroup>
+  <Target Name="RejectReleaseTestHooks" BeforeTargets="PrepareForBuild" Condition="'$(ExporterDeviceTests)' == 'true' and '$(Configuration)' != 'Debug'">
+    <Error Text="Device test hooks are permitted only in Debug test packages." />
+  </Target>
   <ItemGroup>
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#F4F6FB" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F4F6FB" BaseSize="128,128" />
