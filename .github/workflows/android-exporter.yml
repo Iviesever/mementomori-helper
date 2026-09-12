@@ -178,12 +178,19 @@ jobs:
           $verification | Set-Content ../artifacts/apk/APK-SIGNATURE.txt -Encoding utf8
           $hash = (Get-FileHash $output -Algorithm SHA256).Hash
           "$hash  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content ../artifacts/apk/SHA256SUMS.txt -Encoding ascii
+          $badging = (& (Join-Path $signer.Directory.FullName 'aapt.exe') dump badging $output) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
+          if ($badging -notmatch "(?m)^package: name='io\.github\.iviesever\.mementomori\.exporter' versionCode='(?<code>[0-9]+)' versionName='(?<version>[^']+)'") { throw 'Unexpected APK identity or version.' }
+          $manifestVersionCode = [string]$Matches['code']
+          $manifestVersionName = [string]$Matches['version']
           [xml]$project = Get-Content MementoMori.Exporter.Android.csproj
+          $expectedDisplayVersion = [string]$project.Project.PropertyGroup[0].ApplicationDisplayVersion
+          if ($manifestVersionCode -ne '${{ github.run_number }}' -or $manifestVersionName -ne $expectedDisplayVersion) { throw 'Built APK version differs from requested version.' }
           $buildCommit = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           @{
             sourceCommit = $env:SOURCE_COMMIT; buildCommit = $buildCommit; workflowRun = '${{ github.run_id }}'
-            applicationVersion = '${{ github.run_number }}'; displayVersion = $project.Project.PropertyGroup.ApplicationDisplayVersion
+            applicationVersion = $manifestVersionCode; displayVersion = $manifestVersionName
             signing = 'ephemeral-development-key'; certificateSha256 = $fingerprint
             architecture = 'android-arm64'; sha256 = $hash; realDeviceTest = 'not-performed'
           } | ConvertTo-Json | Set-Content ../artifacts/apk/BUILD-INFO.json -Encoding utf8
