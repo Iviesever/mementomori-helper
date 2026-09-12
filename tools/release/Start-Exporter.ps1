@@ -10,6 +10,8 @@ if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Extract the comp
 $privateRoot = Join-Path $env:LOCALAPPDATA 'MementoMoriExporter'
 $sessionRoot = Join-Path $privateRoot ('session-' + [Guid]::NewGuid().ToString('N'))
 $process = $null
+$started = $false
+$stdoutTask = $null; $stderrTask = $null
 New-Item -ItemType Directory -Path $sessionRoot -Force | Out-Null
 try {
     if (-not $OfflineCheck) {
@@ -19,13 +21,11 @@ try {
         if ($null -eq $config.AuthOption -or $config.GameConfig.AutoJob.DisableAll -ne $true) {
             throw 'Private configuration must contain AuthOption and GameConfig.AutoJob.DisableAll=true.'
         }
-        # Do not import arbitrary server binding, reporting endpoints or automation settings.
         $safe = @{ AuthOption = $config.AuthOption; GameConfig = @{ AutoJob = @{ DisableAll = $true }; ReportBattleLog = $false; RecordBattleLog = $false } }
         $json = $safe | ConvertTo-Json -Depth 100
         [IO.File]::WriteAllText((Join-Path $sessionRoot 'appsettings.user.json'), $json, [Text.UTF8Encoding]::new($false))
         $json = $null; $safe = $null; $config = $null
     }
-    # Refuse an occupied port rather than opening another process's page.
     $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
     try { $probe.Start() } finally { $probe.Stop() }
     $info = [Diagnostics.ProcessStartInfo]::new()
@@ -33,7 +33,6 @@ try {
     $info.WorkingDirectory = $sessionRoot
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
-    # Core error output can contain remote request bodies. Drain it; never persist or print it.
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
     if ($OfflineCheck) {
@@ -45,9 +44,18 @@ try {
     }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
-    [void]$process.Start()
-    $process.BeginOutputReadLine()
-    $process.BeginErrorReadLine()
+    $started = $process.Start()
+    if (-not $started) { throw 'Could not start the exporter process.' }
+    if ($OfflineCheck) {
+        # This mode never constructs game services or loads a private configuration.
+        # Only its bounded, credential-free startup diagnostics may be shown in CI.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+    } else {
+        # Normal protocol output may contain credentials: drain without printing/persisting it.
+        $process.BeginOutputReadLine()
+        $process.BeginErrorReadLine()
+    }
     $url = "http://127.0.0.1:$Port/safe-export-ui"
     $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
@@ -66,9 +74,17 @@ try {
     if ($process.ExitCode -ne 0) { throw 'Exporter process failed.' }
 } finally {
     if ($null -ne $process) {
-        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        if ($started -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        if ($OfflineCheck -and $started) {
+            foreach ($task in @($stdoutTask, $stderrTask)) {
+                if ($null -ne $task) {
+                    $text = $task.GetAwaiter().GetResult()
+                    if ($text.Length -gt 8192) { $text = $text.Substring($text.Length - 8192) }
+                    Write-Host $text
+                }
+            }
+        }
         $process.Dispose()
     }
-    # Contains only this launch's private configuration and caches, never the original config.
     if (Test-Path -LiteralPath $sessionRoot) { Remove-Item -LiteralPath $sessionRoot -Recurse -Force }
 }
