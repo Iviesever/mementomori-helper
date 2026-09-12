@@ -18,6 +18,12 @@ on:
       - 'Directory.Build.props'
       - 'global.json'
   workflow_dispatch:
+    inputs:
+      physical_acceptance_apk:
+        description: 'Produce an isolated .dev APK for phone acceptance; never a daily update'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -202,6 +208,33 @@ jobs:
         run: ../tools/release/Build-AndroidRelease.ps1 -OutputDirectory ../artifacts/release-input -VersionCode ${{ github.run_number }}
       - name: Test signing identity and failure cleanup with disposable CI key
         run: ../tools/release/Test-AndroidSigning.ps1 -InputApk ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -ReleaseApk ../artifacts/release-input/input.apk
+      - name: Prepare explicitly requested physical acceptance package
+        if: github.event_name == 'workflow_dispatch' && inputs.physical_acceptance_apk
+        run: |
+          $root = '../artifacts/physical-acceptance'
+          New-Item -ItemType Directory $root -Force | Out-Null
+          $name = 'MementoMori-Exporter-PHONE-ACCEPTANCE-ONLY-dev-arm64.apk'
+          Copy-Item ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk "$root/$name"
+          Copy-Item ../artifacts/apk/APK-SIGNATURE.txt "$root/APK-SIGNATURE.txt"
+          $info = Get-Content ../artifacts/apk/BUILD-INFO.json -Raw | ConvertFrom-Json
+          if ($info.sourceCommit -ne '${{ github.sha }}' -or $info.buildCommit -ne '${{ github.sha }}') { throw 'Acceptance APK must match this exact source.' }
+          $info.distribution = 'physical-acceptance-only-not-a-daily-update'
+          $info | ConvertTo-Json | Set-Content "$root/BUILD-INFO.json" -Encoding utf8
+          $hash = (Get-FileHash "$root/$name" -Algorithm SHA256).Hash
+          "$hash  $name" | Set-Content "$root/SHA256SUMS.txt" -Encoding ascii
+          @'
+          PHONE ACCEPTANCE ONLY. Isolated .dev package with a temporary development certificate.
+          Keep the existing normal exporter installed. This is not a daily update or an upgrade-retention test.
+          Do not enter real credentials into CI or upload private account data with acceptance reports.
+          The owner must report actual device acceptance for the exact source before stable signing is approved.
+          '@ | Set-Content "$root/READ-ME-FIRST.txt" -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.physical_acceptance_apk
+        with:
+          name: exporter-phone-acceptance-only-dev-arm64
+          path: artifacts/physical-acceptance/
+          if-no-files-found: error
+          retention-days: 3
       # Do not distribute disposable-key APKs as updates. Only the protected stable
       # signing workflow may publish the daily-use Android package.
       - name: Record Android update distribution policy

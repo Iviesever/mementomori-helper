@@ -4,6 +4,9 @@ param(
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     [string]$Repository = 'Iviesever/mementomori-helper',
     [string]$KeyPath = '',
+    # Optional Windows DPAPI SecureString file produced by the local password dialog.
+    [string]$PasswordFile = '',
+    [string]$BackupDirectory = '',
     [ValidatePattern('^[A-Za-z0-9_.-]+$')][string]$KeyAlias = 'exporter',
     [switch]$CreateNew,
     [switch]$UploadToGitHub
@@ -28,11 +31,51 @@ if (-not (Test-Path -LiteralPath $KeyPath) -and -not $CreateNew) {
     throw 'No local key. Restore your existing key, or deliberately pass -CreateNew for a first-time identity.'
 }
 $creating = -not (Test-Path -LiteralPath $KeyPath)
+$publicCertificatePath = [IO.Path]::ChangeExtension($KeyPath, '.cer')
+if ($creating -and (Test-Path -LiteralPath $publicCertificatePath)) {
+    throw 'A local public certificate already exists. Restore its private key; do not create a new identity.'
+}
+# Refuse to create a replacement identity BEFORE creating any private key.
+if ($UploadToGitHub) {
+    $gh = (Get-Command gh -ErrorAction Stop).Source
+    $environmentJson = & $gh api "repos/$Repository/environments/android-release"
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the signing environment. No key was created.' }
+    $preflightEnvironment = $environmentJson | ConvertFrom-Json
+    if (@($preflightEnvironment.protection_rules | Where-Object { $_.type -eq 'required_reviewers' -and @($_.reviewers).Count -gt 0 }).Count -eq 0 -or $preflightEnvironment.deployment_branch_policy.custom_branch_policies -ne $true) {
+        throw 'Required reviewers and custom deployment branches must be configured before key creation.'
+    }
+    foreach ($scope in @('repository', 'environment')) {
+        $scopeArgs = @('--repo', $Repository)
+        if ($scope -eq 'environment') { $scopeArgs += @('--env', 'android-release') }
+        $knownVariables = & $gh variable list @scopeArgs --json name,value
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect existing signing identity.' }
+        $knownSecrets = & $gh secret list @scopeArgs --json name
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect existing signing inputs.' }
+        $knownPins = @(($knownVariables | ConvertFrom-Json) | Where-Object { $_.name -in @('ANDROID_SIGNING_CERT_SHA256','ANDROID_CERT_SHA256') })
+        $knownAndroidSecrets = @(($knownSecrets | ConvertFrom-Json) | Where-Object { $_.name -like 'ANDROID_*' })
+        if ($creating -and ($knownPins.Count -gt 0 -or $knownAndroidSecrets.Count -gt 0)) {
+            throw 'A signing identity already exists on GitHub. Restore its private key; creating a replacement is forbidden.'
+        }
+        if ($knownAndroidSecrets.Count -gt 0 -and $knownPins.Count -eq 0) { throw 'Existing signing inputs have no public identity pin. Inspect them before continuing.' }
+        if ($scope -eq 'repository') { $repositoryPins = $knownPins }
+        else { $environmentPins = $knownPins }
+    }
+    $branchJson = & $gh api "repos/$Repository/environments/android-release/deployment-branch-policies?per_page=100"
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect deployment branches.' }
+    $preflightBranches = $branchJson | ConvertFrom-Json
+    if ($preflightBranches.total_count -lt 1 -or $preflightBranches.total_count -gt 2 -or @($preflightBranches.branch_policies).Count -ne $preflightBranches.total_count) { throw 'Expected only explicitly allowed release branches.' }
+    foreach ($branch in $preflightBranches.branch_policies) {
+        if ($branch.name -notin @('master','feature/android-account-exporter') -or ($branch.type -and $branch.type -ne 'branch')) { throw 'Unexpected deployment branch; no key will be created.' }
+    }
+}
 if ($creating) {
     Write-Host 'A NEW long-lived identity cannot update old randomly signed preview APKs.'
     if ((Read-Host 'Type CREATE to create your first permanent signing key') -cne 'CREATE') { throw 'Setup canceled.' }
 } else { Write-Host 'Reusing the existing local key; it will NOT be replaced.' }
-$storeSecure = Read-Host 'Keystore password (retain it in your password manager)' -AsSecureString
+$storeSecure = if ($PasswordFile) {
+    # ConvertTo-SecureString without a supplied key uses Windows current-user DPAPI.
+    (Get-Content -LiteralPath $PasswordFile -Raw).Trim() | ConvertTo-SecureString
+} else { Read-Host 'Keystore password (retain it in your password manager)' -AsSecureString }
 $keySecure = $null
 $storePlain = $null; $keyPlain = $null
 $oldStore = $env:MM_SIGNING_SETUP_STORE; $oldKey = $env:MM_SIGNING_SETUP_KEY
@@ -88,6 +131,35 @@ try {
     Invoke-OwnerCommand -Executable $keytool -Arguments @('-certreq','-keystore',$KeyPath,'-alias',$KeyAlias,'-storepass:env','MM_SIGNING_SETUP_STORE','-keypass:env','MM_SIGNING_SETUP_KEY','-file',"$work/proof.csr") | Out-Null
     Invoke-OwnerCommand -Executable $keytool -Arguments @('-exportcert','-keystore',$KeyPath,'-alias',$KeyAlias,'-storepass:env','MM_SIGNING_SETUP_STORE','-file',"$work/public.cer") | Out-Null
     $fingerprint = (Get-FileHash "$work/public.cer" -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ((Test-Path -LiteralPath $publicCertificatePath) -and (Get-FileHash -LiteralPath $publicCertificatePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $fingerprint) {
+        throw 'Local public certificate differs. Restore the matching key before changing signing configuration.'
+    }
+    foreach ($pin in @($repositoryPins) + @($environmentPins)) {
+        if ($pin -and ($pin.value -notmatch '^[A-Fa-f0-9]{64}$' -or $pin.value.ToLowerInvariant() -ne $fingerprint)) {
+            throw 'Repository certificate pin differs. No signing inputs will be changed.'
+        }
+    }
+    Copy-Item -LiteralPath "$work/public.cer" -Destination $publicCertificatePath
+    if ($BackupDirectory) {
+        $backupRoot = [IO.Path]::GetFullPath($BackupDirectory)
+        $ancestor = $backupRoot
+        while ($ancestor) {
+            if (Test-Path (Join-Path $ancestor '.git')) { throw 'Backup must be outside every Git checkout.' }
+            $parent = [IO.Directory]::GetParent($ancestor)
+            $ancestor = if ($parent) { $parent.FullName } else { $null }
+        }
+        $backupPath = Join-Path $backupRoot ([IO.Path]::GetFileName($KeyPath))
+        if ($backupPath -eq $KeyPath) { throw 'Backup must be a separate file.' }
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        if (Test-Path -LiteralPath $backupPath) {
+            if ((Get-FileHash $backupPath).Hash -ne (Get-FileHash $KeyPath).Hash) { throw 'Different backup exists; refusing to overwrite it.' }
+        } else { Copy-Item -LiteralPath $KeyPath -Destination $backupPath }
+        if ((Get-FileHash $backupPath).Hash -ne (Get-FileHash $KeyPath).Hash) { throw 'Key backup hash verification failed.' }
+        # Prove the backup can perform a private-key operation with the retained password.
+        Invoke-OwnerCommand -Executable $keytool -Arguments @('-certreq','-keystore',$backupPath,'-alias',$KeyAlias,'-storepass:env','MM_SIGNING_SETUP_STORE','-keypass:env','MM_SIGNING_SETUP_KEY','-file',"$work/backup-proof.csr") | Out-Null
+        Copy-Item -LiteralPath "$work/public.cer" -Destination (Join-Path $backupRoot 'exporter.cer')
+        Write-Host "Backup bytes and private-key recovery verified: $backupPath"
+    }
     Write-Host "Public certificate SHA256: $fingerprint"
     Write-Host "Keep independent encrypted backups of $KeyPath and its password before publishing any APK."
     if (-not $UploadToGitHub) { return }
@@ -125,6 +197,11 @@ try {
     $env:MM_SIGNING_SETUP_STORE = $oldStore; $env:MM_SIGNING_SETUP_KEY = $oldKey
     $storePlain = $null; $keyPlain = $null; $secretValues = $null
     if ($storeSecure) { $storeSecure.Dispose() }; if ($keySecure) { $keySecure.Dispose() }
-    if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+    if (Test-Path -LiteralPath $work) {
+        $resolvedWork = (Resolve-Path -LiteralPath $work).Path
+        $expectedWork = [IO.Path]::GetFullPath($work)
+        if ($resolvedWork -ne $expectedWork -or -not ([IO.Path]::GetFileName($resolvedWork).StartsWith('mm-public-cert-'))) { throw 'Unexpected temporary directory; refusing cleanup.' }
+        Remove-Item -LiteralPath $resolvedWork -Recurse -Force
+    }
     # Never delete the permanent key, including after an upload failure.
 }
