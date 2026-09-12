@@ -1,0 +1,95 @@
+name: Exporter protected stable signing
+
+# No pull_request, pull_request_target, workflow_run or arbitrary source-ref input.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exporter-stable-signing
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Iviesever/mementomori-helper' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature/android-account-exporter')
+    runs-on: windows-2022
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: MementoMori.Exporter.Android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21'
+      - name: Install Android toolchain
+        run: |
+          dotnet workload install maui-android
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build MementoMori.Exporter.Android.csproj -t:InstallAndroidDependencies -f net10.0-android "-p:AndroidSdkDirectory=$env:ANDROID_HOME" "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile release without the stable private key
+        run: |
+          $versionCode = 100000 + [int]'${{ github.run_number }}'
+          dotnet publish MementoMori.Exporter.Android.csproj -c Release -f net10.0-android -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:ApplicationVersion=$versionCode -p:PublishTrimmed=false -p:RunAOTCompilation=false "-p:JavaSdkDirectory=$env:JAVA_HOME" "-clp:ErrorsOnly;Summary"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $apk = Get-ChildItem bin/Release -Recurse -Filter '*-Signed.apk' | Where-Object { $_.FullName -match '[\\/]publish[\\/]' } | Select-Object -First 1
+          if (-not $apk) { throw 'Release APK not found.' }
+          New-Item -ItemType Directory ../artifacts/signing-input -Force | Out-Null
+          Copy-Item $apk.FullName ../artifacts/signing-input/input.apk
+      - name: Audit before signing
+        run: ../tools/release/Test-DependencyAudit.ps1 -Project MementoMori.Exporter.Android.csproj -OutputPath ../artifacts/signing-input/dependency-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exporter-stable-signing-input
+          path: artifacts/signing-input/
+          retention-days: 1
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 10
+    # Maintainer must provision required reviewers and branch restrictions on this environment.
+    # Missing environment secrets/pinned fingerprint fails closed; no debug-key fallback.
+    environment: android-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          name: exporter-stable-signing-input
+          path: signing-input
+      - name: Sign only after environment approval
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_SIGNING_CERT_SHA256: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
+        run: ./tools/release/Sign-AndroidApk.ps1 -InputApk signing-input/input.apk -OutputDirectory artifacts/signed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mementomori-exporter-android-arm64-stable-signed
+          path: artifacts/signed/
+          retention-days: 14
+          if-no-files-found: error

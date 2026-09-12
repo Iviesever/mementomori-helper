@@ -28,6 +28,12 @@ internal class Program
 
     public static async Task Main(string[] args)
     {
+        // Explicit offline packaging check: never initialize accounts, network or Quartz.
+        if (args.Contains("--exporter-offline-check", StringComparer.Ordinal))
+        {
+            await OfflineExportCheck.RunAsync();
+            return;
+        }
         PlatformRegistrationManager.SetRegistrationNamespaces(RegistrationNamespace.Blazor);
         var builder = WebApplication.CreateBuilder(args);
 
@@ -78,7 +84,6 @@ internal class Program
         var app = builder.Build();
         Services.Setup(app.Services);
 
-        // Configure the HTTP request pipeline.
         if (!app.Environment.IsDevelopment()) app.UseExceptionHandler("/Error");
 
         app.UseStaticFiles();
@@ -91,10 +96,6 @@ internal class Program
 
         if (earlySafeExportStart)
         {
-            // Interactive safe-export mode starts Kestrel before the helper finishes
-            // network/master-data/login initialization. This lets the local export UI
-            // appear immediately. The launcher's root probe gets a cheap local 200
-            // response, while a real /safe-export request waits for initialization.
             app.Use(async (context, next) =>
             {
                 if (context.Request.Path == "/")
@@ -104,21 +105,13 @@ internal class Program
                     return;
                 }
 
-                if (string.Equals(
-                        context.Request.Path.Value,
-                        "/safe-export",
-                        StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(context.Request.Path.Value, "/safe-export", StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
-                        await SafeExportInitialization.Task.WaitAsync(
-                            TimeSpan.FromMinutes(3),
-                            context.RequestAborted);
+                        await SafeExportInitialization.Task.WaitAsync(TimeSpan.FromMinutes(3), context.RequestAborted);
                     }
-                    catch (OperationCanceledException)
-                    {
-                        return;
-                    }
+                    catch (OperationCanceledException) { return; }
                     catch (TimeoutException)
                     {
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
@@ -140,7 +133,6 @@ internal class Program
                         return;
                     }
                 }
-
                 await next();
             });
         }
@@ -157,20 +149,13 @@ internal class Program
             return;
         }
 
-        // In interactive export mode, start listening first so the browser UI can
-        // open while master-data refresh and account login continue in parallel.
         await app.StartAsync();
-
         try
         {
             await InitializeAsync(app.Services);
             SafeExportInitialization.TrySetResult(true);
         }
-        catch (Exception e)
-        {
-            SafeExportInitialization.TrySetException(e);
-        }
-
+        catch (Exception e) { SafeExportInitialization.TrySetException(e); }
         await app.WaitForShutdownAsync();
     }
 
