@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using MementoMori.Ortega.Share.Data.Auth;
 using MementoMori.Funcs;
+using MementoMori.Export;
 
 namespace MementoMori.Exporter.Android.Services;
 
@@ -23,6 +24,7 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
     public long SelectedUserId { get; private set; }
     public long? SelectedWorldId { get; private set; }
     public DateTimeOffset? FetchedAtUtc { get; private set; }
+    public bool LastExportHasWarnings { get; private set; }
     public string Summary { get; private set; } = "尚未读取账号数据";
 
     public async Task LoadSavedAsync()
@@ -90,6 +92,7 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         SelectedUserId = 0;
         SelectedWorldId = null;
         FetchedAtUtc = null;
+        LastExportHasWarnings = false;
         Summary = "尚未读取账号数据";
         var configured = auth.Value.Accounts.ToList();
         try
@@ -190,12 +193,17 @@ public sealed class MobileSession(IServiceProvider services, MemoryOptions<AuthO
         await gate.WaitAsync();
         try
         {
+            LastExportHasWarnings = false;
             if (FetchedAtUtc is not { } fetched || SelectedUserId != expectedUserId ||
                 Manager.CurrentUserId != expectedUserId || !Manager.Current.Funcs.LoginOk)
                 throw new InvalidOperationException("请先读取当前所选账号。");
-            var snapshot = await Task.Run(() => MobileSnapshot.BuildAsync(Manager, sections, fetched));
+            var applicationVersion = Microsoft.Maui.ApplicationModel.AppInfo.Current.VersionString;
+            var snapshot = await Task.Run(() => MobileSnapshot.BuildAsync(Manager, sections, fetched, applicationVersion));
             var bytes = splitZip ? MobileSnapshot.Zip(snapshot, sections) : MobileSnapshot.SerializeSafe(snapshot, pretty);
-            return await ExportFiles.WriteAsync(bytes, splitZip);
+            var hasWarnings = ExportMetadata.HasWarnings(snapshot);
+            var path = await ExportFiles.WriteAsync(bytes, splitZip);
+            LastExportHasWarnings = hasWarnings;
+            return path;
         }
         finally { gate.Release(); }
     }

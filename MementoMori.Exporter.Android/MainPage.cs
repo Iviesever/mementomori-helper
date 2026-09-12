@@ -101,7 +101,7 @@ public sealed class MainPage : ContentPage
             foreach (var check in sections.Values) check.IsChecked = true;
         };
         var sectionsCard = Card(Heading("02  导出内容 · 默认全部勾选"), selectAll, sectionPanel,
-            Body("包含原有全部 8 类导出信息，卡池也默认勾选。可按需取消；再次启动时恢复全选。卡池读取失败会在文件内标记，不影响其他内容。"));
+            Body("包含原有全部 8 类导出信息，卡池也默认勾选。可按需取消；再次启动时恢复全选。资料未解析或卡池读取失败会在文件和生成结果中标记。"));
         var optionsCard = Card(Heading("03  生成、保存与分享"),
             Toggle("按内容分文件，打包为 ZIP", zip), Toggle("JSON 易读排版（文件会更大）", pretty),
             export, output, save, shareAgain,
@@ -113,7 +113,7 @@ public sealed class MainPage : ContentPage
         Content = new ScrollView { Content = new VerticalStackLayout
         {
             Spacing = 14, Padding = new Thickness(18, 18, 18, 32),
-            Children = { Heading("MementoMori", 28), Body("手机账号导出 · 预览版 0.3.0"), accountCard, sectionsCard, optionsCard, footer }
+            Children = { Heading("MementoMori", 28), Body($"手机账号导出 · 预览版 {AppInfo.Current.VersionString}"), accountCard, sectionsCard, optionsCard, footer }
         } };
         login.Clicked += async (_, _) => await RunUiAsync(SignInAsync);
         import.Clicked += async (_, _) => await RunUiAsync(ImportAsync);
@@ -248,7 +248,15 @@ public sealed class MainPage : ContentPage
             "equipment" => "装备符石", "decks" => "队伍", "items" => "背包", "gacha" => "卡池", _ => key
         });
         output.Text = $"已生成 {(zip.IsToggled ? "ZIP" : "JSON")} · {length / 1024.0:F1} KB\n内容：{string.Join("、", labels)}\n{Path.GetFileName(lastExport)}";
-        status.Text = "文件已生成；可以保存到手机，也可以分享。";
+        if (session.LastExportHasWarnings)
+        {
+            output.Text += "\n注意：部分资料未解析或卡池读取失败；详见文件中的 metadataStatus / errorType。";
+            status.Text = "已生成带提示的文件；不能把未解析资料当作真实的零值或空卡池。";
+        }
+        else
+        {
+            status.Text = "文件已生成；可以保存到手机，也可以分享。";
+        }
     }
 
     private string RequireLastExport()

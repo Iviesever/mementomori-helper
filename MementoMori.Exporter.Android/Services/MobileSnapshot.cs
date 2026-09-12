@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using MementoMori.Export;
 using MementoMori.Extensions;
 using MementoMori.Ortega.Common.Utils;
 using MementoMori.Ortega.Custom;
@@ -12,7 +13,7 @@ using MementoMori.Ortega.Share.Enums;
 namespace MementoMori.Exporter.Android.Services;
 
 // Explicit projection of the desktop SafeExport.cs v3.1 contract. Never serialize raw user DTOs.
-// Kept inside the new Android project so the working Windows exporter is not modified.
+// Metadata corrections are shared; platform entry points and account lifecycles remain separate.
 public static class MobileSnapshot
 {
     public const string Schema = "mementomori-safe-account-export-v3.1";
@@ -21,7 +22,7 @@ public static class MobileSnapshot
         { "clientkey", "password", "authtoken", "token", "session", "credential", "guid", "playerid", "userid" };
 
     public static async Task<Dictionary<string, object?>> BuildAsync(AccountManager manager, IEnumerable<string> selection,
-        DateTimeOffset fetchedAtUtc)
+        DateTimeOffset fetchedAtUtc, string applicationVersion)
     {
         var selected = new HashSet<string>(selection, StringComparer.Ordinal);
         if (selected.Count == 0 || selected.Any(x => !Sections.Contains(x))) throw new ArgumentException("请选择有效的导出内容。");
@@ -34,7 +35,8 @@ public static class MobileSnapshot
         int? Index(string? guid) => !string.IsNullOrEmpty(guid) && indices.TryGetValue(guid, out var n) ? n : null;
         string? Name(long id) => Try(() => Masters.TextResourceTable.Get(Masters.CharacterTable.GetById(id).NameKey));
         string? ItemName(ItemType type, long id) => Try(() => ItemUtil.GetItemName(type, id));
-        string? ItemRarity(ItemType type, long id) => Try(() => ItemUtil.GetItemRarity(type, id));
+        string? ItemRarity(ItemType type, long id) => Try(() => type == ItemType.EquipmentFragment
+            ? ExportMetadata.EquipmentFragmentRarity(id) : ItemUtil.GetItemRarity(type, id));
         string? Quest(long id) => Try(() => Masters.QuestTable.GetById(id)?.Memo);
 
         object Sphere(long id)
@@ -42,11 +44,15 @@ public static class MobileSnapshot
             try
             {
                 var s = Masters.SphereTable.GetById(id);
-                return new { sphereId = id, name = Masters.TextResourceTable.Get(s.NameKey), level = s.Lv,
-                    type = s.SphereType.ToString(), rarity = s.RarityFlags.ToString(), isAttackType = s.IsAttackType };
+                if (s == null) return ExportMetadata.MissingSphere(id);
+                // A failed translation must not erase known numeric metadata.
+                var name = Try(() => Masters.TextResourceTable.Get(s.NameKey));
+                var rarity = s.RarityFlags.ToString();
+                return new { sphereId = id, name, level = s.Lv,
+                    type = s.SphereType.ToString(), rarity, isAttackType = s.IsAttackType,
+                    metadataStatus = ExportMetadata.ItemMetadataStatus(name, rarity) };
             }
-            catch { return new { sphereId = id, name = (string?)null, level = 0L, type = (string?)null,
-                rarity = (string?)null, isAttackType = false }; }
+            catch { return ExportMetadata.MissingSphere(id); }
         }
         object[] Equipment(UserCharacterDtoInfo c) => (data.UserEquipmentDtoInfos ?? new List<UserEquipmentDtoInfo>())
             .Where(e => e.CharacterGuid == c.Guid).Select(e => (object)new
@@ -68,7 +74,8 @@ public static class MobileSnapshot
         {
             ["schema"] = Schema, ["generatedAtUtc"] = DateTimeOffset.UtcNow,
             ["source"] = new { helperVersion = "v1.14.2", helperCommit = "167d2ac7d4f2b04bb6e191aae930be905bebd95e",
-                exporter = "android-native-v0.1.0", accountDataFetchedAtUtc = fetchedAtUtc },
+                helperCommitKind = "upstream-baseline",
+                exporter = ExportMetadata.AndroidExporterIdentity(applicationVersion), accountDataFetchedAtUtc = fetchedAtUtc },
             ["selectedSections"] = Sections.Where(selected.Contains).ToArray()
         };
         if (selected.Contains("player"))
@@ -129,17 +136,23 @@ public static class MobileSnapshot
             }).OrderBy(d => d.contentType).ThenBy(d => d.deckNo).ToArray();
         if (selected.Contains("items"))
             result["items"] = (data.UserItemDtoInfo ?? new List<UserItemDtoInfo>()).Where(i => i.ItemCount != 0)
-                .Select(i => new { itemType = i.ItemType.ToString(), itemId = i.ItemId, name = ItemName(i.ItemType, i.ItemId),
-                    rarity = ItemRarity(i.ItemType, i.ItemId), count = i.ItemCount }).OrderBy(i => i.itemType).ThenBy(i => i.itemId).ToArray();
+                .Select(i =>
+                {
+                    var name = ItemName(i.ItemType, i.ItemId);
+                    var rarity = ItemRarity(i.ItemType, i.ItemId);
+                    return new { itemType = i.ItemType.ToString(), itemId = i.ItemId, name, rarity, count = i.ItemCount,
+                        metadataStatus = ExportMetadata.ItemMetadataStatus(name, rarity) };
+                }).OrderBy(i => i.itemType).ThenBy(i => i.itemId).ToArray();
         if (selected.Contains("gacha"))
         {
             GetListResponse? response = null;
             string? error = null;
             try { response = await account.Funcs.GetResponse<GetListRequest, GetListResponse>(new GetListRequest()); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception e) { error = e.GetType().Name; }
             result["gacha"] = new
             {
-                errorType = error,
+                errorType = ExportMetadata.ListReadError(response?.GachaCaseInfoList != null, error),
                 cases = (response?.GachaCaseInfoList ?? new List<GachaCaseInfo>()).Select(c => new
                 {
                     gachaCaseId = c.GachaCaseId, memo = Try(() => Masters.GachaCaseTable.GetById(c.GachaCaseId)?.Memo),
