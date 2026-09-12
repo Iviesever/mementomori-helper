@@ -16,6 +16,9 @@ internal static class OfflineExportCheck
             Args = Array.Empty<string>(), ContentRootPath = AppContext.BaseDirectory
         });
         builder.Configuration.Sources.Clear();
+        // UseUrls writes host configuration. Retain a writable provider without loading
+        // appsettings, user secrets or arbitrary ASPNETCORE_URLS/Kestrel environment values.
+        builder.Configuration.AddInMemoryCollection();
         builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
         var app = builder.Build();
         app.Use(async (context, next) =>
