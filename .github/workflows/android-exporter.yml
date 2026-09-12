@@ -103,6 +103,9 @@ jobs:
           Compress-Archive -Path artifacts/windows/runtime/* -DestinationPath artifacts/windows-package/MementoMori-Exporter-windows-x64-preview.zip
           $hash = Get-FileHash artifacts/windows-package/*.zip -Algorithm SHA256
           "$($hash.Hash)  MementoMori-Exporter-windows-x64-preview.zip" | Set-Content artifacts/windows-package/SHA256SUMS.txt -Encoding ascii
+      - name: Verify extracted Windows archive and launcher in a path with spaces
+        shell: pwsh
+        run: ./tools/release/Test-WindowsPackage.ps1 -Package artifacts/windows-package/MementoMori-Exporter-windows-x64-preview.zip
       - uses: actions/upload-artifact@v4
         with:
           name: mementomori-exporter-windows-x64-preview

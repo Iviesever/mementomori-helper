@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """No-account Android runtime verification for the isolated Debug test package."""
+import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import time
@@ -66,6 +68,23 @@ def main() -> None:
         raise RuntimeError("Native login UI is not visible")
     image = subprocess.run(["adb", "exec-out", "screencap", "-p"], capture_output=True, timeout=30, check=True).stdout
     (OUT / "native-ui.png").write_bytes(image)
+    build_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                                  text=True, check=True, timeout=15).stdout.strip()
+    evidence = {
+        "sourceCommit": os.environ.get("SOURCE_COMMIT", build_commit),
+        "buildCommit": build_commit,
+        "workflowRun": os.environ.get("GITHUB_RUN_ID"),
+        "testPackage": PACKAGE,
+        "testApkSha256": hashlib.sha256(apks[0].read_bytes()).hexdigest(),
+        "androidApi": adb("shell", "getprop", "ro.build.version.sdk"),
+        "androidRelease": adb("shell", "getprop", "ro.build.version.release"),
+        "abi": adb("shell", "getprop", "ro.product.cpu.abi"),
+        "emulator": True,
+        "physicalDevice": False,
+        "realGameLogin": False,
+        "passed": True,
+    }
+    (OUT / "BUILD-INFO.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print("Android emulator: storage restart, export copy/clear, repeated picker cancellation and native UI checks passed.")
 
 

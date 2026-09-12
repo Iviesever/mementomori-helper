@@ -2,7 +2,7 @@
 
 Extract the entire ZIP before running `START-EXPORTER.cmd`. It includes its .NET runtime; no SDK, git checkout or separately installed .NET runtime is needed. This is an unsigned Windows preview, not an Authenticode-signed installer.
 
-Normal use needs your existing private desktop login configuration at `%LOCALAPPDATA%\MementoMoriExporter\appsettings.user.json`. It must contain AuthOption and GameConfig.AutoJob.DisableAll=true. Alternatively run `Start-Exporter.ps1 -ConfigPath <your-private-path>`. Never send this file to chat, GitHub or a bug report.
+Normal use needs your existing private desktop login configuration at `%LOCALAPPDATA%\MementoMoriExporter\appsettings.user.json`. It must contain a valid AuthOption. Portable mode forces GameConfig.AutoJob.DisableAll=true independently of the original file. Alternatively run `Start-Exporter.ps1 -ConfigPath <your-private-path>`. Never send this file to chat, GitHub or a bug report.
 
 The launcher copies only AuthOption into a per-launch private working directory and forces automatic jobs and battle-log reporting off. It binds to 127.0.0.1, opens the local export UI, and discards inherited protocol console output. Close via the UI shutdown button. The launcher removes its own temporary working directory after the child exits; it never removes your original configuration or exports. Closing/killing the launcher abruptly can leave the private session directory behind. Master data is currently fetched again for each isolated session.
 
