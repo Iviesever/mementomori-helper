@@ -20,7 +20,9 @@ foreach ($file in @($java,$jar,$aapt)) { if (-not (Test-Path -LiteralPath $file)
 $badging = (& $aapt dump badging $inputPath) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Input APK manifest could not be checked.' }
 if (-not $AllowDebuggableForTest -and $badging.Contains('application-debuggable')) { throw 'Stable signing refuses debuggable APKs.' }
-if ($badging -notmatch "(?m)^package: name='io\.github\.iviesever\.mementomori\.exporter' versionCode='(?<code>[0-9]+)' versionName='(?<version>[^']+)'") { throw 'Unexpected Android package identity or version.' }
+$expectedPackage = if ($AllowDebuggableForTest) { 'io.github.iviesever.mementomori.exporter.dev' } else { 'io.github.iviesever.mementomori.exporter' }
+$packagePattern = [regex]::Escape($expectedPackage)
+if ($badging -notmatch "(?m)^package: name='$packagePattern' versionCode='(?<code>[0-9]+)' versionName='(?<version>[^']+)'") { throw 'Unexpected Android package identity or version.' }
 $versionCode = [long]$Matches['code']
 $displayVersion = $Matches['version']
 if ($versionCode -lt 1 -or $versionCode -gt 2100000000) { throw 'Invalid Android versionCode.' }
@@ -48,7 +50,7 @@ try {
     @{
         sourceCommit = $env:SOURCE_COMMIT; buildCommit = $env:BUILD_COMMIT
         workflowRun = $env:GITHUB_RUN_ID; certificateSha256 = $actual; sha256 = $hash
-        packageName = 'io.github.iviesever.mementomori.exporter'
+        packageName = $expectedPackage
         applicationVersion = $versionCode; displayVersion = $displayVersion
         inputSha256 = (Get-FileHash $inputPath -Algorithm SHA256).Hash
         signing = $(if ($AllowDebuggableForTest -or $DisposableKeyForTest) { 'disposable-test-key' } else { 'protected-stable-key' })

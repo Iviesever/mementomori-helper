@@ -10,7 +10,7 @@
     <MauiVersion>10.0.101</MauiVersion>
     <ApplicationTitle>MementoMori 账号导出器</ApplicationTitle>
     <ApplicationId>io.github.iviesever.mementomori.exporter</ApplicationId>
-    <ApplicationDisplayVersion>0.4.0</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>0.4.1</ApplicationDisplayVersion>
     <ApplicationVersion>40</ApplicationVersion>
     <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
     <AndroidPackageFormats>apk</AndroidPackageFormats>
@@ -20,6 +20,11 @@
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
     <AndroidLinkMode>None</AndroidLinkMode>
+  </PropertyGroup>
+  <!-- Debug certificates are disposable: never share the daily-use package identity. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <ApplicationId>io.github.iviesever.mementomori.exporter.dev</ApplicationId>
+    <ApplicationTitle>MementoMori 导出器（开发测试）</ApplicationTitle>
   </PropertyGroup>
   <PropertyGroup Condition="'$(ExporterDeviceTests)' == 'true' and '$(Configuration)' == 'Debug'">
     <DefineConstants>$(DefineConstants);EXPORTER_DEVICE_TESTS</DefineConstants>

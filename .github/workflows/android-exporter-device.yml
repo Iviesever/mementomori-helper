@@ -1,7 +1,7 @@
 name: Android exporter runtime checks
 on:
   push:
-    branches: ['codex/android-exporter-distribution-validation']
+    branches: ['codex/android-exporter-distribution-validation', 'codex/android-exporter-update-continuity']
   pull_request:
     branches: [master, feature/android-account-exporter, 'codex/android-exporter-*']
     paths:
@@ -44,13 +44,19 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Build isolated no-account runtime-test package
+      - name: Build two isolated versions for account-preserving upgrade tests
         working-directory: MementoMori.Exporter.Android
         run: |
           dotnet workload install maui-android
           dotnet build -t:InstallAndroidDependencies -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:JavaSdkDirectory="$JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
-          dotnet build -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-x64 -p:ExporterDeviceTests=true -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904' '-clp:ErrorsOnly;Summary'
-      - name: Exercise actual Android storage, restart and system picker cancellation
+          mkdir -p ../artifacts/device-apks
+          for version in 1001 1002; do
+            dotnet build -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-x64 -p:ExporterDeviceTests=true -p:ApplicationVersion="$version" -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904' '-clp:ErrorsOnly;Summary'
+            mapfile -t apks < <(find bin/Debug -type f -name '*-Signed.apk')
+            test "${#apks[@]}" -eq 1
+            cp "${apks[0]}" "../artifacts/device-apks/version-$version.apk"
+          done
+      - name: Exercise in-place version upgrade, saved account and system picker
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
