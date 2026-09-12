@@ -11,9 +11,10 @@ $oldPort = $env:MEMENTOMORI_EXPORTER_PORT
 $process = $null
 try {
     $env:MEMENTOMORI_EXPORTER_PORT = [string]$Port
-    $arguments = @('--exporter-portable')
-    if ($OfflineCheck) { $arguments += '--exporter-offline-check' }
-    $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $PSScriptRoot -PassThru
+    # Explicit values are compatible with the ASP.NET host command-line parser.
+    $arguments = @('--exporter-portable=true')
+    if ($OfflineCheck) { $arguments = @('--exporter-offline-check','--exporter-portable') }
+    $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $PSScriptRoot -NoNewWindow -PassThru
     $url = "http://127.0.0.1:$Port/safe-export-ui"
     $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
