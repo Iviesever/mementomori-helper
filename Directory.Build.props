@@ -1,0 +1,10 @@
+<Project>
+  <!-- Keep the exporter CI's security gate at restore time, including transitive dependencies.
+       Other applications in this repository keep their existing build policy. -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true' and ('$(MSBuildProjectName)' == 'Exporter.Android.Tests' or '$(MSBuildProjectName)' == 'MementoMori.WebUI' or '$(MSBuildProjectName)' == 'MementoMori.Exporter.Android')">
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>

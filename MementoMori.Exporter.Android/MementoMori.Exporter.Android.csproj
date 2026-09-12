@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>MementoMori.Exporter.Android</RootNamespace>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <MauiVersion>10.0.101</MauiVersion>
+    <ApplicationTitle>MementoMori 账号导出器</ApplicationTitle>
+    <ApplicationId>io.github.iviesever.mementomori.exporter</ApplicationId>
+    <ApplicationDisplayVersion>0.4.1</ApplicationDisplayVersion>
+    <ApplicationVersion>40</ApplicationVersion>
+    <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
+    <AndroidPackageFormats>apk</AndroidPackageFormats>
+    <AndroidKeyStore Condition="'$(AndroidKeyStore)' == ''">false</AndroidKeyStore>
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+    <!-- Protocol DTOs require runtime reflection; do not trim or AOT until audited. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidLinkMode>None</AndroidLinkMode>
+  </PropertyGroup>
+  <!-- Debug certificates are disposable: never share the daily-use package identity. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <ApplicationId>io.github.iviesever.mementomori.exporter.dev</ApplicationId>
+    <ApplicationTitle>MementoMori 导出器（开发测试）</ApplicationTitle>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(ExporterDeviceTests)' == 'true' and '$(Configuration)' == 'Debug'">
+    <DefineConstants>$(DefineConstants);EXPORTER_DEVICE_TESTS</DefineConstants>
+    <ApplicationId>io.github.iviesever.mementomori.exporter.devicetest</ApplicationId>
+  </PropertyGroup>
+  <Target Name="RejectReleaseTestHooks" BeforeTargets="PrepareForBuild" Condition="'$(ExporterDeviceTests)' == 'true' and '$(Configuration)' != 'Debug'">
+    <Error Text="Device test hooks are permitted only in Debug test packages." />
+  </Target>
+  <ItemGroup>
+    <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#F4F6FB" />
+    <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F4F6FB" BaseSize="128,128" />
+    <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+    <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
+    <ProjectReference Include="../MementoMori.BlazorShared/MementoMori.BlazorShared.csproj" />
+  </ItemGroup>
+</Project>

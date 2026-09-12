@@ -3,9 +3,11 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MementoMori.Export;
 using MementoMori.Ortega.Common.Utils;
 using MementoMori.Ortega.Custom;
 using MementoMori.Ortega.Share;
+using MementoMori.Ortega.Share.Data;
 using MementoMori.Ortega.Share.Data.ApiInterface.Gacha;
 using MementoMori.Ortega.Share.Data.DtoInfo;
 using MementoMori.Ortega.Share.Data.Gacha;
@@ -216,13 +218,27 @@ internal static class SafeExport
         return (result, null);
     }
 
-    private static async Task<Dictionary<string, object?>> BuildSnapshotAsync(
+    private static Task<Dictionary<string, object?>> BuildSnapshotAsync(
         AccountManager accountManager,
         HashSet<string> selectedSections)
     {
         var account = accountManager.Current;
-        var data = account.Funcs.UserSyncData;
-        var userId = accountManager.CurrentUserId;
+        return BuildSnapshotDataAsync(account.Funcs.UserSyncData, accountManager.CurrentUserId,
+            selectedSections,
+            async () => await account.Funcs.GetResponse<GetListRequest, GetListResponse>(new GetListRequest()));
+    }
+
+    // The real endpoint uses this same projection. Tests supply synthetic DTOs and a list reader,
+    // avoiding credentials, network calls and automatic login while exercising the actual fields.
+    internal static async Task<Dictionary<string, object?>> BuildSnapshotDataAsync(
+        UserSyncData data,
+        long userId,
+        HashSet<string> selectedSections,
+        Func<Task<GetListResponse?>> readGacha)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(selectedSections);
+        ArgumentNullException.ThrowIfNull(readGacha);
         var characterDtos = (data.UserCharacterDtoInfos ?? new List<UserCharacterDtoInfo>()).ToList();
         var selectedInOrder = AllSections.Where(selectedSections.Contains).ToArray();
         var generatedAtUtc = DateTimeOffset.UtcNow;
@@ -263,7 +279,9 @@ internal static class SafeExport
         {
             try
             {
-                return ItemUtil.GetItemRarity(itemType, itemId);
+                return itemType == ItemType.EquipmentFragment
+                    ? ExportMetadata.EquipmentFragmentRarity(itemId)
+                    : ItemUtil.GetItemRarity(itemType, itemId);
             }
             catch
             {
@@ -300,27 +318,24 @@ internal static class SafeExport
             try
             {
                 var sphere = Masters.SphereTable.GetById(sphereId);
+                if (sphere == null) return ExportMetadata.MissingSphere(sphereId);
+                string? name = null;
+                try { name = Masters.TextResourceTable.Get(sphere.NameKey); }
+                catch { /* Translation failure must not erase known numeric metadata. */ }
                 return new
                 {
                     sphereId,
-                    name = Masters.TextResourceTable.Get(sphere.NameKey),
+                    name,
                     level = sphere.Lv,
                     type = sphere.SphereType.ToString(),
                     rarity = sphere.RarityFlags.ToString(),
-                    isAttackType = sphere.IsAttackType
+                    isAttackType = sphere.IsAttackType,
+                    metadataStatus = ExportMetadata.ItemMetadataStatus(name, sphere.RarityFlags.ToString())
                 };
             }
             catch
             {
-                return new
-                {
-                    sphereId,
-                    name = (string?)null,
-                    level = 0L,
-                    type = (string?)null,
-                    rarity = (string?)null,
-                    isAttackType = false
-                };
+                return ExportMetadata.MissingSphere(sphereId);
             }
         }
 
@@ -343,9 +358,10 @@ internal static class SafeExport
                     try
                     {
                         var equipmentMb = Masters.EquipmentTable.GetById(e.EquipmentId);
-                        equipmentName = Masters.TextResourceTable.Get(equipmentMb.NameKey);
+                        // Keep slot and rarity even when this language has no translated name.
                         slot = equipmentMb.SlotType.ToString();
                         rarity = equipmentMb.RarityFlags.ToString();
+                        equipmentName = Masters.TextResourceTable.Get(equipmentMb.NameKey);
                     }
                     catch
                     {
@@ -395,7 +411,8 @@ internal static class SafeExport
             {
                 helperVersion = "v1.14.2",
                 helperCommit = "167d2ac7d4f2b04bb6e191aae930be905bebd95e",
-                exporter = "selective-ui-v3.1"
+                helperCommitKind = "upstream-baseline",
+                exporter = "selective-ui-v3.1.1"
             },
             ["selectedSections"] = selectedInOrder
         };
@@ -596,13 +613,19 @@ internal static class SafeExport
         {
             snapshot["items"] = (data.UserItemDtoInfo ?? new List<UserItemDtoInfo>())
                 .Where(item => item.ItemCount != 0)
-                .Select(item => new
+                .Select(item =>
                 {
-                    itemType = item.ItemType.ToString(),
-                    itemId = item.ItemId,
-                    name = SafeItemName(item.ItemType, item.ItemId),
-                    rarity = SafeItemRarity(item.ItemType, item.ItemId),
-                    count = item.ItemCount
+                    var name = SafeItemName(item.ItemType, item.ItemId);
+                    var rarity = SafeItemRarity(item.ItemType, item.ItemId);
+                    return new
+                    {
+                        itemType = item.ItemType.ToString(),
+                        itemId = item.ItemId,
+                        name,
+                        rarity,
+                        count = item.ItemCount,
+                        metadataStatus = ExportMetadata.ItemMetadataStatus(name, rarity)
+                    };
                 })
                 .OrderBy(x => x.itemType)
                 .ThenBy(x => x.itemId)
@@ -616,13 +639,16 @@ internal static class SafeExport
 
             try
             {
-                // Read/list request only. No DrawRequest is issued by this endpoint.
-                gachaResponse = await account.Funcs.GetResponse<GetListRequest, GetListResponse>(new GetListRequest());
+                // Production supplies a read/list request only, never a draw operation.
+                gachaResponse = await readGacha();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception e)
             {
-                // Avoid serializing exception messages because remote error text is not
-                // part of the export whitelist. The type is enough for diagnostics.
+                // Never serialize remote error messages or request bodies.
                 gachaErrorType = e.GetType().Name;
             }
 
@@ -684,7 +710,7 @@ internal static class SafeExport
 
             snapshot["gacha"] = new
             {
-                errorType = gachaErrorType,
+                errorType = ExportMetadata.ListReadError(gachaResponse?.GachaCaseInfoList != null, gachaErrorType),
                 cases = gachaCases
             };
         }
