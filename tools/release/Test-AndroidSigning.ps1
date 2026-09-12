@@ -1,4 +1,7 @@
-param([Parameter(Mandatory = $true)][string]$InputApk)
+param(
+    [Parameter(Mandatory = $true)][string]$InputApk,
+    [Parameter(Mandatory = $true)][string]$ReleaseApk
+)
 $ErrorActionPreference = 'Stop'
 $names = @('ANDROID_KEYSTORE_BASE64','ANDROID_KEYSTORE_PASSWORD','ANDROID_KEY_ALIAS','ANDROID_KEY_PASSWORD','ANDROID_SIGNING_CERT_SHA256')
 foreach ($name in $names) {
@@ -10,7 +13,6 @@ $script = Join-Path $PSScriptRoot 'Sign-AndroidApk.ps1'
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
     $key = Join-Path $root 'test.keystore'
-    # A disposable CI key with a deliberately non-secret test password. Never upload either.
     & "$env:JAVA_HOME/bin/keytool.exe" -genkeypair -keystore $key -alias fixture -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Disposable CI Test' -storepass fixture-test-only -keypass fixture-test-only -noprompt 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the disposable signing fixture.' }
     $cert = Join-Path $root 'public.cer'
@@ -24,10 +26,16 @@ try {
     $env:ANDROID_SIGNING_CERT_SHA256 = $expected
     & $script -InputApk $InputApk -OutputDirectory (Join-Path $root 'first') -AllowDebuggableForTest
     & $script -InputApk $InputApk -OutputDirectory (Join-Path $root 'second') -AllowDebuggableForTest
-    foreach ($name in @('first','second')) {
+    # Exercise the actual Release path with debuggable rejection enabled, but a disposable key.
+    & $script -InputApk $ReleaseApk -OutputDirectory (Join-Path $root 'release') -DisposableKeyForTest
+    foreach ($name in @('first','second','release')) {
         $info = Get-Content (Join-Path $root "$name/BUILD-INFO.json") -Raw | ConvertFrom-Json
         if ($info.certificateSha256 -ne $expected -or $info.signing -ne 'disposable-test-key') { throw 'Signing fixture identity mismatch.' }
     }
+    $rejected = $false
+    try { & $script -InputApk $InputApk -OutputDirectory (Join-Path $root 'debug-rejected') -DisposableKeyForTest }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Stable signing accepted a debuggable APK.' }
     $env:ANDROID_SIGNING_CERT_SHA256 = '0' * 64
     $rejected = $false
     try { & $script -InputApk $InputApk -OutputDirectory (Join-Path $root 'wrong-cert') -AllowDebuggableForTest }
@@ -41,7 +49,7 @@ try {
     try { & $script -InputApk $InputApk -OutputDirectory (Join-Path $root 'missing-key') -AllowDebuggableForTest }
     catch { $rejected = $true }
     if (-not $rejected) { throw 'Missing signing configuration was accepted.' }
-    Write-Host 'PASS: two signatures use one pinned identity; wrong certificate and missing inputs fail closed.'
+    Write-Host 'PASS: two preview signatures and a Release signature use one pinned identity; debug APKs, wrong certificates and missing inputs fail closed.'
     Write-Host 'Disposable signing tests do not provision a stable release key or prove device update compatibility.'
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $null) }

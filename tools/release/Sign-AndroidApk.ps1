@@ -1,10 +1,10 @@
 param(
     [Parameter(Mandatory = $true)][string]$InputApk,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
-    [switch]$AllowDebuggableForTest
+    [switch]$AllowDebuggableForTest,
+    [switch]$DisposableKeyForTest
 )
 $ErrorActionPreference = 'Stop'
-# All private values arrive through the protected job environment, never command arguments.
 foreach ($name in @('ANDROID_KEYSTORE_BASE64','ANDROID_KEYSTORE_PASSWORD','ANDROID_KEY_ALIAS','ANDROID_KEY_PASSWORD','ANDROID_SIGNING_CERT_SHA256')) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Missing signing input: $name" }
 }
@@ -13,12 +13,14 @@ if ($env:ANDROID_KEYSTORE_BASE64.Length -gt 14000000) { throw 'Signing key input
 $inputPath = (Resolve-Path -LiteralPath $InputApk).Path
 $tools = Get-ChildItem "$env:ANDROID_HOME/build-tools" -Filter apksigner.bat -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $tools) { throw 'Android SDK apksigner is required.' }
+$java = Join-Path $env:JAVA_HOME 'bin/java.exe'
+$jar = Join-Path $tools.Directory.FullName 'lib/apksigner.jar'
 $aapt = Join-Path $tools.Directory.FullName 'aapt.exe'
-if (-not (Test-Path -LiteralPath $aapt)) { throw 'Android SDK aapt is required.' }
+foreach ($file in @($java,$jar,$aapt)) { if (-not (Test-Path -LiteralPath $file)) { throw 'Complete JDK and Android SDK signing tools are required.' } }
 $badging = (& $aapt dump badging $inputPath) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Input APK manifest could not be checked.' }
 if (-not $AllowDebuggableForTest -and $badging.Contains('application-debuggable')) { throw 'Stable signing refuses debuggable APKs.' }
-if ($badging -notmatch "package: name='io.github.iviesever.mementomori.exporter'") { throw 'Unexpected APK application ID.' }
+if ($badging -notmatch "(?m)^package: name='io\.github\.iviesever\.mementomori\.exporter'") { throw 'Unexpected APK application ID.' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $output = Join-Path $outputRoot 'MementoMori-Exporter-android-arm64.apk'
 if (Test-Path -LiteralPath $output) { throw 'Refusing to overwrite an existing signed APK.' }
@@ -30,28 +32,24 @@ $ok = $false
 try {
     New-Item -ItemType Directory -Path $keyDirectory | Out-Null
     [IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
-    # apksigner removes the temporary development signature and signs the same compiled payload.
-    $signOutput = (& $tools.FullName sign --ks $keyPath --ks-key-alias $env:ANDROID_KEY_ALIAS --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD --out $output $inputPath 2>&1) -join "`n"
+    # Invoke the SDK's actual apksigner engine directly, avoiding batch-wrapper argument handling.
+    $signOutput = (& $java -jar $jar sign --ks $keyPath --ks-key-alias $env:ANDROID_KEY_ALIAS --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD --out $output $inputPath 2>&1) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw 'APK signing failed.' }
-    $verification = (& $tools.FullName verify --verbose --print-certs $output 2>&1) -join "`n"
+    $verification = (& $java -jar $jar verify --verbose --print-certs $output 2>&1) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw 'Signed APK verification failed.' }
-    if ($verification -notmatch 'Signer #1 certificate SHA-256 digest: ([A-Fa-f0-9]{64})') { throw 'Signed APK has no certificate fingerprint.' }
-    $actual = $Matches[1].ToLowerInvariant()
+    $actual = & (Join-Path $PSScriptRoot 'Get-ApkSigningIdentity.ps1') -Report $verification
     if ($actual -ne $env:ANDROID_SIGNING_CERT_SHA256.ToLowerInvariant()) { throw 'Signing certificate does not match the pinned identity.' }
-    if ($verification -notmatch 'Verified using v2 scheme .*: true') { throw 'APK Signature Scheme v2 is required.' }
     $hash = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  MementoMori-Exporter-android-arm64.apk" | Set-Content (Join-Path $outputRoot 'SHA256SUMS.txt') -Encoding ascii
-    # These outputs contain public identity and provenance only.
     $verification | Set-Content (Join-Path $outputRoot 'APK-SIGNATURE.txt') -Encoding utf8
     @{
         sourceCommit = $env:SOURCE_COMMIT; buildCommit = $env:BUILD_COMMIT
         workflowRun = $env:GITHUB_RUN_ID; certificateSha256 = $actual; sha256 = $hash
-        signing = $(if ($AllowDebuggableForTest) { 'disposable-test-key' } else { 'protected-stable-key' })
+        signing = $(if ($AllowDebuggableForTest -or $DisposableKeyForTest) { 'disposable-test-key' } else { 'protected-stable-key' })
         physicalDeviceValidation = 'not-performed-by-this-workflow'
     } | ConvertTo-Json | Set-Content (Join-Path $outputRoot 'BUILD-INFO.json') -Encoding utf8
     $ok = $true
 } catch {
-    # Do not surface signing-tool output, remote values or key-store exceptions into job logs.
     throw 'Protected APK signing failed. Verify key configuration and pinned certificate; private diagnostics were not printed.'
 } finally {
     $signOutput = $null

@@ -41,18 +41,15 @@ jobs:
       - name: Compile release without the stable private key
         run: |
           $versionCode = 100000 + [int]'${{ github.run_number }}'
-          dotnet publish MementoMori.Exporter.Android.csproj -c Release -f net10.0-android -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:ApplicationVersion=$versionCode -p:PublishTrimmed=false -p:RunAOTCompilation=false "-p:JavaSdkDirectory=$env:JAVA_HOME" "-clp:ErrorsOnly;Summary"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $apk = Get-ChildItem bin/Release -Recurse -Filter '*-Signed.apk' | Where-Object { $_.FullName -match '[\\/]publish[\\/]' } | Select-Object -First 1
-          if (-not $apk) { throw 'Release APK not found.' }
-          New-Item -ItemType Directory ../artifacts/signing-input -Force | Out-Null
-          Copy-Item $apk.FullName ../artifacts/signing-input/input.apk
+          ../tools/release/Build-AndroidRelease.ps1 -OutputDirectory ../artifacts/signing-input -VersionCode $versionCode
       - name: Audit before signing
         run: ../tools/release/Test-DependencyAudit.ps1 -Project MementoMori.Exporter.Android.csproj -OutputPath ../artifacts/signing-input/dependency-audit.json
       - uses: actions/upload-artifact@v4
         with:
           name: exporter-stable-signing-input
-          path: artifacts/signing-input/
+          path: |
+            artifacts/signing-input/input.apk
+            artifacts/signing-input/dependency-audit.json
           retention-days: 1
           if-no-files-found: error
 
@@ -60,8 +57,8 @@ jobs:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 10
-    # Maintainer must provision required reviewers and branch restrictions on this environment.
-    # Missing environment secrets/pinned fingerprint fails closed; no debug-key fallback.
+    # Required reviewers and deployment branch restrictions are provisioned in GitHub settings.
+    # Missing environment secrets or pinned identity fails closed; no development-key fallback.
     environment: android-release
     steps:
       - uses: actions/checkout@v4

@@ -65,6 +65,7 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
             if ($parseErrors.Count -gt 0) { throw "Invalid PowerShell syntax in $($_.Name)" }
           }
+          ./tools/release/Test-ApkSigningIdentity.ps1
       - name: Contract, protocol, projection and storage tests
         shell: pwsh
         run: |
@@ -159,15 +160,19 @@ jobs:
           $apks = @(Get-ChildItem bin/Debug -Recurse -Filter '*-Signed.apk')
           if ($apks.Count -ne 1) { throw 'Expected exactly one ARM64 signed APK.' }
           New-Item -ItemType Directory ../artifacts/apk -Force | Out-Null
-          $output = '../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk'
+          $output = [IO.Path]::GetFullPath('../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk')
           Copy-Item $apks[0].FullName $output
           $signer = Get-ChildItem "$env:ANDROID_HOME/build-tools" -Filter apksigner.bat -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $signer) { throw 'apksigner not found.' }
-          $verification = (& $signer.FullName verify --verbose --print-certs $output) -join "`n"
-          if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed.' }
+          $jar = Join-Path $signer.Directory.FullName 'lib/apksigner.jar'
+          if (-not (Test-Path -LiteralPath $jar)) { throw 'apksigner engine not found.' }
+          $verification = (& "$env:JAVA_HOME/bin/java.exe" -jar $jar verify --verbose --print-certs $output 2>&1) -join "`n"
+          $verifyExit = $LASTEXITCODE
+          $verification | Set-Content ../artifacts/build-logs/preview-apk-signature.txt -Encoding utf8
+          Write-Host $verification
+          if ($verifyExit -ne 0) { throw 'APK signature verification failed.' }
+          $fingerprint = ../tools/release/Get-ApkSigningIdentity.ps1 -Report $verification
           $verification | Set-Content ../artifacts/apk/APK-SIGNATURE.txt -Encoding utf8
-          if ($verification -notmatch 'Signer #1 certificate SHA-256 digest: ([A-Fa-f0-9]{64})') { throw 'Missing APK certificate fingerprint.' }
-          $fingerprint = $Matches[1]
           $hash = (Get-FileHash $output -Algorithm SHA256).Hash
           "$hash  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content ../artifacts/apk/SHA256SUMS.txt -Encoding ascii
           [xml]$project = Get-Content MementoMori.Exporter.Android.csproj
@@ -179,8 +184,10 @@ jobs:
             signing = 'ephemeral-development-key'; certificateSha256 = $fingerprint
             architecture = 'android-arm64'; sha256 = $hash; realDeviceTest = 'not-performed'
           } | ConvertTo-Json | Set-Content ../artifacts/apk/BUILD-INFO.json -Encoding utf8
+      - name: Compile the same Release signing input used by the protected workflow
+        run: ../tools/release/Build-AndroidRelease.ps1 -OutputDirectory ../artifacts/release-input -VersionCode ${{ github.run_number }}
       - name: Test signing identity and failure cleanup with disposable CI key
-        run: ../tools/release/Test-AndroidSigning.ps1 -InputApk ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk
+        run: ../tools/release/Test-AndroidSigning.ps1 -InputApk ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -ReleaseApk ../artifacts/release-input/input.apk
       - uses: actions/upload-artifact@v4
         with:
           name: mementomori-exporter-android-arm64-preview
