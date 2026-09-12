@@ -2,9 +2,9 @@ name: Android account exporter (preview)
 
 on:
   push:
-    branches: [feature/android-account-exporter]
+    branches: [feature/android-account-exporter, 'codex/android-exporter-*']
   pull_request:
-    branches: [master, feature/android-account-exporter]
+    branches: [master, feature/android-account-exporter, 'codex/android-exporter-*']
     paths:
       - 'MementoMori.Exporter.Android/**'
       - 'MementoMori.WebUI/**'
@@ -14,23 +14,28 @@ on:
       - 'MementoMori.BlazorShared/**'
       - 'tests/Exporter.Android.Tests/**'
       - 'tools/release/**'
+      - '.github/workflows/*exporter*.yml'
+      - 'Directory.Build.props'
       - 'global.json'
-      - '.github/workflows/android-exporter*.yml'
   workflow_dispatch:
+
 permissions:
   contents: read
+
 concurrency:
-  group: android-exporter-${{ github.ref }}
+  group: android-exporter-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
+
+env:
+  DOTNET_CLI_UI_LANGUAGE: en-US
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
-  apk:
+  windows:
     runs-on: windows-2022
-    timeout-minutes: 40
-    env:
-      DOTNET_CLI_UI_LANGUAGE: en-US
-      DOTNET_NOLOGO: 'true'
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-      SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,103 +54,163 @@ jobs:
           retention-days: 7
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: |
-            9.0.x
-            10.0.x
-      - uses: actions/setup-java@v5
-        with:
-          distribution: microsoft
-          java-version: '21'
-      - name: Contract, projection, storage and sanitization tests (no account needed)
+          dotnet-version: 9.0.x
+      - name: Validate release scripts and record SDK
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path artifacts/build-logs -Force | Out-Null
-          dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results -p:NuGetAudit=true -p:NuGetAuditMode=all -p:NuGetAuditLevel=low "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" -fl "-flp:LogFile=artifacts/build-logs/exporter-tests-build.log;Verbosity=normal"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build complete Windows desktop WebUI project
+          New-Item -ItemType Directory artifacts/build-logs -Force | Out-Null
+          dotnet --info | Set-Content artifacts/build-logs/windows-sdk.txt
+          Get-ChildItem tools/release -Filter '*.ps1' | ForEach-Object {
+            $tokens = $null; $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) { throw "Invalid PowerShell syntax in $($_.Name)" }
+          }
+          ./tools/release/Test-ApkSigningIdentity.ps1
+      - name: Contract, protocol, projection and storage tests
         shell: pwsh
         run: |
-          dotnet build MementoMori.WebUI/MementoMori.WebUI.csproj -c Release -p:NuGetAudit=true -p:NuGetAuditMode=all "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/desktop-build.log;Verbosity=normal"
+          dotnet test tests/Exporter.Android.Tests/Exporter.Android.Tests.csproj -c Release --logger "trx;LogFileName=exporter-tests.trx" --results-directory artifacts/test-results "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/tests.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Signing input validation with disposable synthetic key
+      - name: Publish complete self-contained Windows package
         shell: pwsh
-        run: ./tools/release/Test-SigningPreflight.ps1
-      - name: Publish Windows self-contained distribution
+        run: |
+          dotnet publish MementoMori.WebUI/MementoMori.WebUI.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false -o artifacts/windows/runtime/app "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=artifacts/build-logs/windows-publish.log;Verbosity=normal"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item tools/release/Start-Exporter.ps1 artifacts/windows/runtime/app/
+          Copy-Item tools/release/START-EXPORTER.cmd,tools/release/WINDOWS-README.md,LICENSE artifacts/windows/runtime/
+      - name: Audit Windows dependency graph
         shell: pwsh
-        run: ./tools/release/Package-Windows.ps1
-      - name: Test shipped Windows launcher without a game account
+        run: ./tools/release/Test-DependencyAudit.ps1 -Project MementoMori.WebUI/MementoMori.WebUI.csproj -OutputPath artifacts/security/windows-dependencies.json
+      - name: Test packaged Windows launcher without an account
         shell: pwsh
-        run: ./tools/release/Test-WindowsPackage.ps1
+        run: ./tools/release/Test-WindowsPackage.ps1 -PackageDirectory artifacts/windows/runtime
+      - name: Record provenance and assemble Windows ZIP
+        shell: pwsh
+        run: |
+          $buildCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @{
+            sourceCommit = $env:SOURCE_COMMIT; buildCommit = $buildCommit
+            workflowRun = '${{ github.run_id }}'; architecture = 'win-x64'
+            selfContained = $true; offlineLauncherCheck = 'passed'; realAccountTest = 'not-performed'
+            signing = 'unsigned-windows-preview'; builtAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+          } | ConvertTo-Json | Set-Content artifacts/windows/runtime/BUILD-INFO.json -Encoding utf8
+          Get-ChildItem artifacts/windows/runtime -File -Recurse | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath((Resolve-Path artifacts/windows/runtime).Path, $_.FullName).Replace('\','/')
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $relative"
+          } | Set-Content artifacts/windows/FILE-SHA256SUMS.txt -Encoding ascii
+          Move-Item artifacts/windows/FILE-SHA256SUMS.txt artifacts/windows/runtime/
+          New-Item -ItemType Directory artifacts/windows-package -Force | Out-Null
+          Compress-Archive -Path artifacts/windows/runtime/* -DestinationPath artifacts/windows-package/MementoMori-Exporter-windows-x64-preview.zip
+          $hash = Get-FileHash artifacts/windows-package/*.zip -Algorithm SHA256
+          "$($hash.Hash)  MementoMori-Exporter-windows-x64-preview.zip" | Set-Content artifacts/windows-package/SHA256SUMS.txt -Encoding ascii
+      - name: Verify extracted Windows archive and launcher in a path with spaces
+        shell: pwsh
+        run: ./tools/release/Test-WindowsPackage.ps1 -Package artifacts/windows-package/MementoMori-Exporter-windows-x64-preview.zip
       - uses: actions/upload-artifact@v4
         with:
           name: mementomori-exporter-windows-x64-preview
-          path: artifacts/windows/MementoMori-Exporter-win-x64-preview.zip
+          path: artifacts/windows-package/
           if-no-files-found: error
           retention-days: 14
-      - name: Install supported Android MAUI workload
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exporter-windows-validation
+          path: |
+            artifacts/test-results/
+            artifacts/build-logs/
+            artifacts/security/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  android:
+    needs: windows
+    runs-on: windows-2022
+    timeout-minutes: 40
+    defaults:
+      run:
         shell: pwsh
         working-directory: MementoMori.Exporter.Android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21'
+      - name: Install supported Android MAUI workload
         run: |
+          New-Item -ItemType Directory ../artifacts/build-logs -Force | Out-Null
+          dotnet --info | Set-Content ../artifacts/build-logs/android-sdk.txt
           dotnet workload install maui-android
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Install matching Android SDK dependencies
-        shell: pwsh
-        working-directory: MementoMori.Exporter.Android
+      - name: Install Android SDK dependencies
         run: |
-          dotnet build -t:InstallAndroidDependencies -f net10.0-android "-p:AndroidSdkDirectory=$env:ANDROID_HOME" "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
+          dotnet build MementoMori.Exporter.Android.csproj -t:InstallAndroidDependencies -f net10.0-android "-p:AndroidSdkDirectory=$env:ANDROID_HOME" "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:AcceptAndroidSdkLicenses=True
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build self-contained preview APK
-        shell: pwsh
-        working-directory: MementoMori.Exporter.Android
         run: |
-          dotnet build -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:NuGetAudit=true -p:NuGetAuditMode=all "-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904" "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=../artifacts/build-logs/android-build.log;Verbosity=normal"
+          dotnet build MementoMori.Exporter.Android.csproj -c Debug -f net10.0-android -t:SignAndroidPackage -p:RuntimeIdentifier=android-arm64 -p:AndroidKeyStore=false -p:EmbedAssembliesIntoApk=true "-p:JavaSdkDirectory=$env:JAVA_HOME" -p:ApplicationVersion=${{ github.run_number }} "-clp:ErrorsOnly;Summary" -fl "-flp:LogFile=../artifacts/build-logs/android-build.log;Verbosity=normal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $apk = @(Get-ChildItem bin/Debug -Recurse -Filter '*-Signed.apk')
-          if ($apk.Count -ne 1) { throw 'Expected exactly one signed APK.' }
+      - name: Audit Android dependency graph
+        run: ../tools/release/Test-DependencyAudit.ps1 -Project MementoMori.Exporter.Android.csproj -OutputPath ../artifacts/security/android-dependencies.json
+      - name: Verify preview APK signature and provenance
+        run: |
+          $apks = @(Get-ChildItem bin/Debug -Recurse -Filter '*-Signed.apk')
+          if ($apks.Count -ne 1) { throw 'Expected exactly one ARM64 signed APK.' }
           New-Item -ItemType Directory ../artifacts/apk -Force | Out-Null
-          Copy-Item $apk[0].FullName ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk
-          $hash = Get-FileHash ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -Algorithm SHA256
-          "$($hash.Hash)  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content ../artifacts/apk/SHA256SUMS.txt -Encoding ascii
+          $output = [IO.Path]::GetFullPath('../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk')
+          Copy-Item $apks[0].FullName $output
+          $signer = Get-ChildItem "$env:ANDROID_HOME/build-tools" -Filter apksigner.bat -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signer) { throw 'apksigner not found.' }
+          $jar = Join-Path $signer.Directory.FullName 'lib/apksigner.jar'
+          if (-not (Test-Path -LiteralPath $jar)) { throw 'apksigner engine not found.' }
+          $verification = (& "$env:JAVA_HOME/bin/java.exe" -jar $jar verify --verbose --print-certs $output 2>&1) -join "`n"
+          $verifyExit = $LASTEXITCODE
+          $verification | Set-Content ../artifacts/build-logs/preview-apk-signature.txt -Encoding utf8
+          Write-Host $verification
+          if ($verifyExit -ne 0) { throw 'APK signature verification failed.' }
+          $fingerprint = ../tools/release/Get-ApkSigningIdentity.ps1 -Report $verification
+          $verification | Set-Content ../artifacts/apk/APK-SIGNATURE.txt -Encoding utf8
+          $hash = (Get-FileHash $output -Algorithm SHA256).Hash
+          "$hash  MementoMori-Exporter-android-arm64-preview.apk" | Set-Content ../artifacts/apk/SHA256SUMS.txt -Encoding ascii
+          $badging = (& (Join-Path $signer.Directory.FullName 'aapt.exe') dump badging $output) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
+          if ($badging -notmatch "(?m)^package: name='io\.github\.iviesever\.mementomori\.exporter' versionCode='(?<code>[0-9]+)' versionName='(?<version>[^']+)'") { throw 'Unexpected APK identity or version.' }
+          $manifestVersionCode = [string]$Matches['code']
+          $manifestVersionName = [string]$Matches['version']
+          [xml]$project = Get-Content MementoMori.Exporter.Android.csproj
+          $expectedDisplayVersion = [string]$project.Project.PropertyGroup[0].ApplicationDisplayVersion
+          if ($manifestVersionCode -ne '${{ github.run_number }}' -or $manifestVersionName -ne $expectedDisplayVersion) { throw 'Built APK version differs from requested version.' }
           $buildCommit = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $project = [xml](Get-Content MementoMori.Exporter.Android.csproj -Raw)
           @{
-            sourceCommit = $env:SOURCE_COMMIT
-            buildCommit = $buildCommit
-            workflowRun = '${{ github.run_id }}'
-            applicationVersion = $project.SelectSingleNode('/Project/PropertyGroup/ApplicationVersion').InnerText
-            applicationDisplayVersion = $project.SelectSingleNode('/Project/PropertyGroup/ApplicationDisplayVersion').InnerText
-            signing = 'ephemeral-development-key-NOT-UPDATE-COMPATIBLE'
-            architecture = 'android-arm64'
-            sha256 = $hash.Hash
+            sourceCommit = $env:SOURCE_COMMIT; buildCommit = $buildCommit; workflowRun = '${{ github.run_id }}'
+            applicationVersion = $manifestVersionCode; displayVersion = $manifestVersionName
+            signing = 'ephemeral-development-key'; certificateSha256 = $fingerprint
+            architecture = 'android-arm64'; sha256 = $hash; realDeviceTest = 'not-performed'
           } | ConvertTo-Json | Set-Content ../artifacts/apk/BUILD-INFO.json -Encoding utf8
-      - name: Upload preview APK
-        uses: actions/upload-artifact@v4
+      - name: Compile the same Release signing input used by the protected workflow
+        run: ../tools/release/Build-AndroidRelease.ps1 -OutputDirectory ../artifacts/release-input -VersionCode ${{ github.run_number }}
+      - name: Test signing identity and failure cleanup with disposable CI key
+        run: ../tools/release/Test-AndroidSigning.ps1 -InputApk ../artifacts/apk/MementoMori-Exporter-android-arm64-preview.apk -ReleaseApk ../artifacts/release-input/input.apk
+      - uses: actions/upload-artifact@v4
         with:
           name: mementomori-exporter-android-arm64-preview
           path: artifacts/apk/
           if-no-files-found: error
           retention-days: 14
-      - name: Upload test results
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: android-exporter-test-results
-          path: artifacts/test-results/
-          if-no-files-found: ignore
-      - name: Upload build diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-exporter-build-logs
-          path: artifacts/build-logs/
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Upload runtime validation evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: exporter-runtime-validation
-          path: artifacts/validation/
+          name: exporter-android-validation
+          path: |
+            artifacts/build-logs/
+            artifacts/security/
           if-no-files-found: ignore
           retention-days: 14

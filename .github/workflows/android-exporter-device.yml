@@ -1,7 +1,9 @@
 name: Android exporter runtime checks
 on:
+  push:
+    branches: ['codex/android-exporter-distribution-validation']
   pull_request:
-    branches: [master, feature/android-account-exporter]
+    branches: [master, feature/android-account-exporter, 'codex/android-exporter-*']
     paths:
       - 'MementoMori.Exporter.Android/**'
       - 'MementoMori/**'
@@ -14,13 +16,14 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: exporter-device-${{ github.ref }}
+  group: exporter-device-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   emulator:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
+      SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       DOTNET_NOLOGO: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:

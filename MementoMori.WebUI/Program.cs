@@ -28,6 +28,12 @@ internal class Program
 
     public static async Task Main(string[] args)
     {
+        // Offline validation exits through its own host before constructing game services.
+        if (args.Any(a => a is "--exporter-offline-check" or "--exporter-offline-check=true"))
+        {
+            await OfflineExportCheck.RunAsync();
+            return;
+        }
         PortableExportStartup.Prepare(args);
         PlatformRegistrationManager.SetRegistrationNamespaces(RegistrationNamespace.Blazor);
         var builder = WebApplication.CreateBuilder(args);
@@ -125,12 +131,6 @@ internal class Program
             return;
         }
         await app.StartAsync();
-        if (PortableExportStartup.OfflineCheck)
-        {
-            SafeExportInitialization.TrySetException(new InvalidOperationException("Offline validation mode."));
-            await app.WaitForShutdownAsync();
-            return;
-        }
         try
         {
             await InitializeAsync(app.Services);
